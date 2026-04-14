@@ -11,8 +11,16 @@ const PORT = process.env.PORT || 5000;
 // Initialize Socket.io
 socketService.init(server);
 
-app.use(cors());
+app.use(cors({
+    origin: process.env.FRONTEND_URL || '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true
+}));
 app.use(express.json());
+
+app.get('/', (req, res) => {
+    res.json({ status: 'ok', message: 'SplitWise Clone API is running.' });
+});
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/groups', require('./routes/groups'));
