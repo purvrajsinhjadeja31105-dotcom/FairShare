@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 5000;
 socketService.init(server);
 
 app.use(cors({
-    origin: process.env.FRONTEND_URL || '*',
+    origin: process.env.FRONTEND_URL || true,
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true
 }));

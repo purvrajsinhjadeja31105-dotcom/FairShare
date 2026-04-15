@@ -76,14 +76,14 @@ const DebtDetail = () => {
       </div>
 
       {/* ── Settlement Action Banner ── */}
-      <div className="glass-card" style={{ 
+      <div className="glass-card mobile-stack" style={{ 
         padding: '1.25rem 1.5rem', marginBottom: '2.5rem',
         background: `linear-gradient(90deg, ${isOwed ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)'} 0%, transparent 100%)`,
         borderLeft: `5px solid ${isOwed ? 'var(--success)' : 'var(--danger)'}`,
         borderRadius: '16px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         gap: '1.5rem', boxShadow: '0 10px 30px -10px rgba(0,0,0,0.1)'
-      }} className="mobile-stack">
+      }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
               {/* Relationship Visual */}
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
@@ -92,7 +92,7 @@ const DebtDetail = () => {
                   </div>
                   <div style={{ width: 25, height: 2, background: 'var(--border-color)', margin: '0 -4px', zIndex: 1, opacity: 0.5 }}></div>
                   <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--border-color)', zIndex: 2 }}>
-                    <span style={{ fontSize: '1.1rem', fontWeight: '800' }}>{targetUser?.username[0].toUpperCase()}</span>
+                    <span style={{ fontSize: '1.1rem', fontWeight: '800' }}>{targetUser?.username?.[0]?.toUpperCase()}</span>
                   </div>
                   <div style={{ 
                       position: 'absolute', top: -14, 
@@ -146,7 +146,7 @@ const DebtDetail = () => {
           </div>
         ) : details.map((d, i) => {
           const amIPayer = d.payer_id == currentUser.id;
-          const isSettlement = d.description.toLowerCase().includes('settlement');
+          const isSettlement = d.description?.toLowerCase().includes('settlement');
           
           return (
             <div key={i} className="glass-card" style={{ 

@@ -1,4 +1,5 @@
-const API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+// Use the provided env variable or default to the Render backend URL for production
+const API_URL = import.meta.env.VITE_API_BASE_URL || 'https://splitwise-lcur.onrender.com/api';
 
 const authHeader = () => {
     const token = localStorage.getItem('fairshare_token');
