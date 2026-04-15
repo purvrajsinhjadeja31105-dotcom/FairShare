@@ -2,18 +2,22 @@ const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: Number(process.env.EMAIL_PORT),
-    secure: Number(process.env.EMAIL_PORT) === 465,
+    service: 'gmail',
+    pool: true,
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
+    },
+    debug: process.env.NODE_ENV !== 'production', // Detailed logs in dev, lighter in prod
+    logger: true,
+    tls: {
+        rejectUnauthorized: false // Helps avoid handshake errors on cloud platforms
     }
 });
 
 transporter.verify((err) => {
-    if (err) console.log("Email Error:", err);
-    else console.log("Email Server Ready");
+    if (err) console.error("[Email] Transporter Verify Error:", err);
+    else console.log("[Email] Server is ready to take messages");
 });
 
 const sendVerificationEmail = async (email, username, token) => {
