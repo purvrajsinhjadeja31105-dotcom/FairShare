@@ -1,4 +1,4 @@
-# 💸 SplitEase – Expense Sharing Web Application
+# 💸 FairShare – Expense Sharing Web Application
 
 [![Live Demo](https://img.shields.io/badge/Live-Demo-green?style=for-the-badge&logo=vercel)](https://split-wise-dusky.vercel.app/)
 
