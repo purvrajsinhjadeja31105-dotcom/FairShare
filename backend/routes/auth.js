@@ -112,6 +112,34 @@ router.get('/verify', async (req, res) => {
 });
 
 
+// Manual verification route (Emergency bypass for troubleshooting)
+router.get('/manual-verify', async (req, res) => {
+    try {
+        const { email } = req.query;
+        if (!email) return res.status(400).json({ error: 'Missing email' });
+
+        const [users] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
+        if (users.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        await db.query('UPDATE users SET is_verified = 1, verification_token = NULL WHERE email = ?', [email]);
+        
+        res.send(`
+            <div style="font-family: sans-serif; text-align: center; padding: 50px; background: #ecfdf5; min-height: 100vh;">
+                <div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+                    <h1 style="color: #059669;">Manual Verification Success!</h1>
+                    <p style="color: #065f46; font-size: 16px;">The account for <b>${email}</b> is now verified.</p>
+                    <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/login" style="display: inline-block; background: #059669; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 20px;">Go to Login</a>
+                </div>
+            </div>
+        `);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Database error' });
+    }
+});
+
 router.post('/forgot-password', async (req, res) => {
     try {
         const { email } = req.body;

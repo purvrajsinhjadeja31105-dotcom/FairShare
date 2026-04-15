@@ -58,7 +58,13 @@ const sendVerificationEmail = async (email, username, token) => {
         console.log('[Email] Verification email sent successfully:', info.messageId);
         return info;
     } catch (error) {
-        console.error('[Email] Failed to send verification email:', error);
+        console.error('[Email] CRITICAL: Failed to send verification email.');
+        console.error('[Email] Error details:', {
+            code: error.code,
+            command: error.command,
+            response: error.response,
+            stack: error.stack
+        });
         throw error;
     }
 };
