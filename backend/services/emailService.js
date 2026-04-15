@@ -2,13 +2,18 @@ const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.mailtrap.io',
-    port: process.env.EMAIL_PORT || 2525,
-    secure: process.env.EMAIL_PORT == 465, // true for 465, false for other ports
+    host: process.env.EMAIL_HOST,
+    port: Number(process.env.EMAIL_PORT),
+    secure: Number(process.env.EMAIL_PORT) === 465,
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
     }
+});
+
+transporter.verify((err) => {
+    if (err) console.log("Email Error:", err);
+    else console.log("Email Server Ready");
 });
 
 const sendVerificationEmail = async (email, username, token) => {
