@@ -17,6 +17,7 @@ app.use(express.json());
 // Enhanced CORS for production
 const allowedOrigins = [
     process.env.FRONTEND_URL,
+    'https://split-wise-dusky.vercel.app',
     'http://localhost:5173', // Vite default
     'http://localhost:3000'
 ].filter(Boolean);
