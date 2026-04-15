@@ -1,6 +1,6 @@
 # 💸 FairShare – Expense Sharing Web Application
 
-[![Live Demo](https://img.shields.io/badge/Live-Demo-green?style=for-the-badge&logo=vercel)](https://split-wise-dusky.vercel.app/)
+
 
 A full-stack, real-time expense sharing application inspired by Splitwise, designed to simplify group expense management, debt tracking, and settlements.
 
