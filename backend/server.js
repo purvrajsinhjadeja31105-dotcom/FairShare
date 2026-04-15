@@ -11,12 +11,37 @@ const PORT = process.env.PORT || 5000;
 // Initialize Socket.io
 socketService.init(server);
 
-app.use(cors({
-    origin: process.env.FRONTEND_URL || true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    credentials: true
-}));
+// Standard middleware
 app.use(express.json());
+
+// Enhanced CORS for production
+const allowedOrigins = [
+    process.env.FRONTEND_URL,
+    'http://localhost:5173', // Vite default
+    'http://localhost:3000'
+].filter(Boolean);
+
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+    optionsSuccessStatus: 200
+}));
+
+// Request logger for debugging
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+});
 
 app.get('/', (req, res) => {
     res.json({ status: 'ok', message: 'FairShare Clone API is running.' });
