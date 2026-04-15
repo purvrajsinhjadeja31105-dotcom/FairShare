@@ -30,8 +30,9 @@ router.post('/register', async (req, res) => {
         // Send verification email
         try {
             await emailService.sendVerificationEmail(email, username, verification_token);
+            console.log(`[Auth] Verification email triggered for: ${email}`);
         } catch (emailErr) {
-            console.error('Failed to send verification email:', emailErr);
+            console.error('[Auth] Failed to trigger verification email:', emailErr);
             // We still registered the user, but they might need a "resend" button later
         }
 
