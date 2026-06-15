@@ -1,5 +1,11 @@
 const nodemailer = require('nodemailer');
+const dns = require('dns');
 require('dotenv').config();
+
+// Force IPv4-first DNS resolution to avoid ENETUNREACH IPv6 errors on cloud platforms like Render
+if (typeof dns.setDefaultResultOrder === 'function') {
+    dns.setDefaultResultOrder('ipv4first');
+}
 
 const transporter = nodemailer.createTransport({
     service: 'gmail',
