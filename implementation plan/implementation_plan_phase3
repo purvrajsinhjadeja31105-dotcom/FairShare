@@ -1,0 +1,106 @@
+# Phase 3 Implementation Plan: TypeScript & Backend Code Quality
+
+This plan details the step-by-step migration of the "FairShare" frontend to TypeScript and the introduction of enterprise-grade input validation and global error handling on the Express backend.
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Build Validation:**
+> During migration, the frontend code might throw compilation errors until all main components are updated to TypeScript. We will migrate key configurations, utility files, and contexts first, and then migrate page components one by one.
+>
+> **No Functional Changes:**
+> We will preserve all existing functionality, styles, and logic exactly as they are. The goal is purely architectural enhancement.
+
+---
+
+## Proposed Changes
+
+### Component 1: Frontend TypeScript Migration
+
+To transition from JavaScript to TypeScript in our Vite + React project, we will follow these exact steps:
+
+#### [NEW] [tsconfig.json](file:///c:/CODING/Wed%20development/SplitWise/frontend/tsconfig.json)
+Configure TypeScript options (strict type checks, JSX target, module resolution) appropriate for a modern Vite-React app.
+
+#### [NEW] [tsconfig.node.json](file:///c:/CODING/Wed%20development/SplitWise/frontend/tsconfig.node.json)
+Configure TypeScript compilation options for Vite's configuration.
+
+#### [NEW] [vite-env.d.ts](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/vite-env.d.ts)
+Vite environment types declaration file.
+
+#### [MODIFY] [vite.config.js](file:///c:/CODING/Wed%20development/SplitWise/frontend/vite.config.js) -> rename to [vite.config.ts](file:///c:/CODING/Wed%20development/SplitWise/frontend/vite.config.ts)
+Convert Vite config to TypeScript and reference the React plugin.
+
+#### [MODIFY] [index.html](file:///c:/CODING/Wed%20development/SplitWise/frontend/index.html)
+Update the entry point script tag from `src/main.jsx` to `src/main.tsx`.
+
+#### [NEW] [types.ts](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/types.ts)
+Define shared TypeScript interfaces matching the Firestore backend schemas:
+- `User`: `{ id: string; name: string; email: string; createdAt?: string }`
+- `Group`: `{ id: string; name: string; description?: string; members: string[]; createdBy: string; createdAt: string }`
+- `Expense`: `{ id: string; description: string; amount: number; paidBy: string; splitType: 'equal'|'exact'|'percentage'; splits: Record<string, number>; groupId: string; date: string; createdBy: string }`
+- `Notification`: `{ id: string; userId: string; message: string; type: string; read: boolean; createdAt: string }`
+
+#### [MODIFY] Convert API client
+* Rename [api.js](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/api.js) to [api.ts](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/api.ts)
+* Add explicit type annotations for parameters, return values, and localStorage authentication tokens.
+
+#### [MODIFY] Convert Context Providers
+* Rename [ThemeContext.jsx](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/context/ThemeContext.jsx) to [ThemeContext.tsx](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/context/ThemeContext.tsx)
+* Rename [SocketContext.jsx](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/context/SocketContext.jsx) to [SocketContext.tsx](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/context/SocketContext.tsx)
+
+#### [MODIFY] Convert Entrypoints & App Layout
+* Rename [main.jsx](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/main.jsx) to [main.tsx](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/main.tsx)
+* Rename [App.jsx](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/App.jsx) to [App.tsx](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/App.tsx)
+
+#### [MODIFY] Convert Page Components (One by One)
+Rename and refactor each page component to add typed state, routing parameters, and API response typing:
+1. `Landing.jsx` -> `Landing.tsx`
+2. `Login.jsx` -> `Login.tsx`
+3. `Register.jsx` -> `Register.tsx`
+4. `ForgotPassword.jsx` -> `ForgotPassword.tsx`
+5. `ResetPassword.jsx` -> `ResetPassword.tsx`
+6. `Dashboard.jsx` -> `Dashboard.tsx`
+7. `CreateGroup.jsx` -> `CreateGroup.tsx`
+8. `GroupView.jsx` -> `GroupView.tsx`
+9. `AddExpense.jsx` -> `AddExpense.tsx`
+10. `DebtDetail.jsx` -> `DebtDetail.tsx`
+11. `OwedSummary.jsx` -> `OwedSummary.tsx`
+12. `PersonalHistory.jsx` -> `PersonalHistory.tsx`
+
+---
+
+### Component 2: Backend Validation & Error Handling
+
+To make the Express server robust against malicious or invalid inputs, we will integrate Zod schemas and global Express middleware:
+
+#### [NEW] validation middleware: [validate.js](file:///c:/CODING/Wed%20development/SplitWise/backend/middleware/validate.js)
+Define an Express middleware function `validateBody(schema)`, `validateQuery(schema)`, `validateParams(schema)` that validates input using Zod and returns standardized `400 Bad Request` validation error responses when validation fails.
+
+#### [NEW] input schemas: `backend/validation/*.js`
+Define Zod validation schemas for all key endpoints:
+- **Auth schemas:** `loginSchema`, `registerSchema`, `forgotPasswordSchema`, `resetPasswordSchema`
+- **Expense schemas:** `createExpenseSchema` (checking description, amount > 0, valid groupId, paidBy, splitType, and splits matching members list)
+- **Group schemas:** `createGroupSchema` (checking name is non-empty, and members list has at least one member)
+
+#### [NEW] centralized error handler: [errorHandler.js](file:///c:/CODING/Wed%20development/SplitWise/backend/middleware/errorHandler.js)
+Catch all uncaught exceptions (`500 Internal Server Error`), database connectivity failures, or operational errors in one place. It will log the stack trace to console or file, and return clean JSON response payloads:
+`{ "error": "Internal Server Error", "message": "..." }`
+
+#### [MODIFY] [server.js](file:///c:/CODING/Wed%20development/SplitWise/backend/server.js)
+Register the `errorHandler` middleware at the very end of the routing chain.
+
+#### [MODIFY] Integrate middleware in routes: `backend/routes/*.js`
+Modify route handlers to import schemas and register the validation middleware before handler execution (e.g., `router.post('/register', validateBody(registerSchema), registerHandler)`).
+
+---
+
+## Verification Plan
+
+### Automated Verification
+- Run `npm run build` in the `frontend` to verify TypeScript compile-time checks pass and the production bundle builds without errors.
+
+### Manual Verification
+- Verify user signup, login, password reset flow.
+- Verify creating groups, adding expenses, viewing group splits, and settling debts.
+- Test backend validation by calling auth/expense/group endpoints with malformed or missing parameters using `curl` or a test script and confirming that Zod handles them cleanly with exact validation error messages.

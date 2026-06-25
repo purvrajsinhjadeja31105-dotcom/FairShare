@@ -1,0 +1,6 @@
+fairshare-app-c1a76-firebase-adminsdk-fbsvc-8a15025dee.json
+node_modules/
+.env
+*.log
+dist/
+build/

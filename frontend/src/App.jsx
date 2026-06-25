@@ -18,12 +18,7 @@ import { apiCall } from './api';
 import { useSocket } from './context/SocketContext';
 import './index.css';
 
-// Redirect to dashboard if already logged in (for login/register pages)
-const AuthRoute = ({ children }) => {
-  const token = localStorage.getItem('fairshare_token');
-  return token ? <Navigate to="/dashboard" /> : children;
-};
-
+// Removed AuthRoute as per user request to allow accessing login/landing pages while authenticated
 // Redirect to login if not logged in (for protected pages)
 const PrivateRoute = ({ children }) => {
   const token = localStorage.getItem('fairshare_token');
@@ -126,9 +121,9 @@ function App() {
 
           {!isAuthenticated && (
             <div className="unauth-nav" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <button 
-                className="btn-ghost icon-btn" 
-                onClick={toggleTheme} 
+              <button
+                className="btn-ghost icon-btn"
+                onClick={toggleTheme}
                 aria-label="Toggle theme"
               >
                 {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
@@ -142,17 +137,17 @@ function App() {
 
       <div className="app-container">
         <Routes>
-          {/* Public landing — if already logged in, go to dashboard */}
+          {/* Public landing */}
           <Route
             path="/"
-            element={isAuthenticated ? <Navigate to="/dashboard" /> : <Landing />}
+            element={<Landing />}
           />
 
-          {/* Auth pages — redirect to dashboard if already logged in */}
-          <Route path="/login" element={<AuthRoute><Login setIsAuthenticated={setIsAuthenticated} /></AuthRoute>} />
-          <Route path="/register" element={<AuthRoute><Register setIsAuthenticated={setIsAuthenticated} /></AuthRoute>} />
-          <Route path="/forgot-password" element={<AuthRoute><ForgotPassword /></AuthRoute>} />
-          <Route path="/reset-password" element={<AuthRoute><ResetPassword /></AuthRoute>} />
+          {/* Auth pages */}
+          <Route path="/login" element={<Login setIsAuthenticated={setIsAuthenticated} />} />
+          <Route path="/register" element={<Register setIsAuthenticated={setIsAuthenticated} />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
 
           {/* Protected pages */}
           <Route path="/dashboard" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
@@ -169,7 +164,7 @@ function App() {
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
-        
+
         <footer style={{
           textAlign: 'center',
           padding: '2rem 1rem 1rem',

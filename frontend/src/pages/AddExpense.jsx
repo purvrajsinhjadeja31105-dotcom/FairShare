@@ -25,6 +25,20 @@ const AddExpense = () => {
     const currentUser = JSON.parse(localStorage.getItem('fairshare_user'));
 
     useEffect(() => {
+        // Load from cache first for instant form rendering
+        const cached = localStorage.getItem(`fairshare_cache_group_${id}`);
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                setGroup(parsed.group);
+                setMembers(parsed.members || []);
+            } catch (e) {
+                console.error("Error loading add expense cache:", e);
+            }
+        } else {
+            setGroup(null);
+            setMembers([]);
+        }
         fetchInitialData();
     }, [id]);
 
@@ -42,6 +56,18 @@ const AddExpense = () => {
 
             const memData = await apiCall(`/groups/${id}/members`);
             setMembers(memData.members);
+
+            // Dynamically update the group cache with fresh group/members
+            const cached = localStorage.getItem(`fairshare_cache_group_${id}`);
+            let current = {};
+            if (cached) {
+                try { current = JSON.parse(cached); } catch (e) {}
+            }
+            localStorage.setItem(`fairshare_cache_group_${id}`, JSON.stringify({
+                ...current,
+                group: grpData.group,
+                members: memData.members
+            }));
 
             if (isEdit) {
                 const expData = await apiCall(`/expenses/${id}/all`);
@@ -158,6 +184,31 @@ const AddExpense = () => {
             setIsSubmitting(false);
         }
     };
+
+    if (!group || members.length === 0) {
+        return (
+            <div style={{
+                minHeight: '80vh',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '1.5rem',
+            }}>
+                <div style={{
+                    width: 48,
+                    height: 48,
+                    border: '4px solid rgba(99, 102, 241, 0.1)',
+                    borderTopColor: 'var(--accent-primary)',
+                    borderRadius: '50%',
+                    animation: 'spin 1.5s linear infinite'
+                }} />
+                <span style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', fontWeight: '600', letterSpacing: '0.5px' }}>
+                    Loading expense details...
+                </span>
+            </div>
+        );
+    }
 
     return (
         <div style={{ maxWidth: 800, margin: '2rem auto', padding: '0 1rem', animation: 'fadeIn 0.5s ease-out' }}>

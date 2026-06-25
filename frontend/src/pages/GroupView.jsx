@@ -22,6 +22,7 @@ const GroupView = () => {
   const oweListRef = useRef(null);
   const activityActionsRef = useRef(null);
   const [settlementsDetails, setSettlementsDetails] = useState([]);
+  const [simplifiedDebts, setSimplifiedDebts] = useState([]);
   const [activePoll, setActivePoll] = useState(null);
   const [isVoting, setIsVoting] = useState(false);
   const [activeActivityTab, setActiveActivityTab] = useState('mine'); // 'mine' or 'others'
@@ -46,6 +47,33 @@ const GroupView = () => {
   const currentUser = JSON.parse(localStorage.getItem('fairshare_user'));
 
   useEffect(() => {
+    // Stale-While-Revalidate: load from cache first for instant rendering
+    const cached = localStorage.getItem(`fairshare_cache_group_${id}`);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        setGroup(parsed.group);
+        setMembers(parsed.members || []);
+        setExpenses(parsed.expenses || []);
+        setBalances(parsed.balances || {});
+        setSettlementsDetails(parsed.settlementsDetails || []);
+        setSimplifiedDebts(parsed.simplifiedDebts || []);
+        setActivePoll(parsed.activePoll || null);
+        setUserGroupSummary(parsed.userGroupSummary || { youAreOwed: 0, youOwe: 0 });
+      } catch (e) {
+        console.error("Error loading group cache:", e);
+      }
+    } else {
+      // Clear previous group states to prevent showing old group data on initial load
+      setGroup(null);
+      setMembers([]);
+      setExpenses([]);
+      setBalances({});
+      setSettlementsDetails([]);
+      setSimplifiedDebts([]);
+      setActivePoll(null);
+      setUserGroupSummary({ youAreOwed: 0, youOwe: 0 });
+    }
     fetchGroupData();
   }, [id]);
 
@@ -96,21 +124,21 @@ const GroupView = () => {
 
   const fetchGroupData = async () => {
     try {
-      const grpData = await apiCall(`/groups/${id}`);
+      // Fetch all group details, members, expenses, settlements, and active polls in parallel
+      const [grpData, memData, expData, balData, pollData] = await Promise.all([
+        apiCall(`/groups/${id}`),
+        apiCall(`/groups/${id}/members`),
+        apiCall(`/expenses/${id}/all`),
+        apiCall(`/expenses/${id}/settlements`),
+        apiCall(`/groups/${id}/active-poll`)
+      ]);
+
       setGroup(grpData.group);
-
-      const memData = await apiCall(`/groups/${id}/members`);
       setMembers(memData.members);
-
-      const expData = await apiCall(`/expenses/${id}/all`);
       setExpenses(expData.expenses);
-
-      const balData = await apiCall(`/expenses/${id}/settlements`);
       setBalances(balData.balances);
       setSettlementsDetails(balData.details || []);
-
-      // Fetch active poll
-      const pollData = await apiCall(`/groups/${id}/active-poll`);
+      setSimplifiedDebts(balData.simplifiedDebts || []);
       setActivePoll(pollData.poll);
 
       // Compute net totals from details (same logic as dropdown, avoids int/string key mismatch)
@@ -132,7 +160,20 @@ const GroupView = () => {
         if (net > 0) totalOwed += net;
         else if (net < 0) totalOwe += Math.abs(net);
       }
-      setUserGroupSummary({ youAreOwed: totalOwed, youOwe: totalOwe });
+      const summary = { youAreOwed: totalOwed, youOwe: totalOwe };
+      setUserGroupSummary(summary);
+
+      // Save to localStorage cache for SWR instant loading
+      localStorage.setItem(`fairshare_cache_group_${id}`, JSON.stringify({
+        group: grpData.group,
+        members: memData.members,
+        expenses: expData.expenses,
+        balances: balData.balances,
+        settlementsDetails: balData.details || [],
+        simplifiedDebts: balData.simplifiedDebts || [],
+        activePoll: pollData.poll,
+        userGroupSummary: summary
+      }));
 
     } catch (err) {
       console.error(err);
@@ -301,6 +342,31 @@ const GroupView = () => {
     }
     return net;
   };
+
+  if (!group) {
+    return (
+      <div style={{
+        minHeight: '80vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '1.5rem',
+      }}>
+        <div style={{
+          width: 48,
+          height: 48,
+          border: '4px solid rgba(99, 102, 241, 0.1)',
+          borderTopColor: 'var(--accent-primary)',
+          borderRadius: '50%',
+          animation: 'spin 1.5s linear infinite'
+        }} />
+        <span style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', fontWeight: '600', letterSpacing: '0.5px' }}>
+          Loading group details...
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '1rem' }}>
@@ -946,6 +1012,89 @@ const GroupView = () => {
                   <Wallet size={18} /> Settlement
                 </button>
               </>
+            )}
+          </div>
+
+          {/* Suggested Settlement Plan (Simplified Debts) */}
+          <div className="glass-card" style={{ padding: '1.5rem' }}>
+            <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Wallet size={18} /> Suggested Settlements
+            </h3>
+            <p style={{ margin: '0.2rem 0 1rem 0', fontSize: '0.8rem', opacity: 0.6 }}>
+              Simplified payment plans calculated to clear all balances in the group.
+            </p>
+            {simplifiedDebts.length === 0 ? (
+              <p style={{ fontSize: '0.85rem', opacity: 0.5, fontStyle: 'italic', margin: 0, textAlign: 'center', padding: '1rem 0' }}>
+                All settled up! No payments suggested. 🎉
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {simplifiedDebts.map((debt, index) => {
+                  const isDebtor = debt.fromUserId === currentUser?.id;
+                  const isCreditor = debt.toUserId === currentUser?.id;
+                  const isInvolved = isDebtor || isCreditor;
+
+                  return (
+                    <div
+                      key={index}
+                      style={{
+                        padding: '0.75rem 0.9rem',
+                        background: isInvolved ? 'rgba(99, 102, 241, 0.05)' : 'rgba(255, 255, 255, 0.02)',
+                        borderRadius: '12px',
+                        border: `1px solid ${isInvolved ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.05)'}`,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.25rem' }}>
+                        <div style={{ fontSize: '0.85rem' }}>
+                          <span style={{ fontWeight: isDebtor ? '800' : '600', color: isDebtor ? 'var(--danger)' : 'var(--text-primary)' }}>
+                            {isDebtor ? 'You' : debt.fromUserName}
+                          </span>
+                          <span style={{ opacity: 0.6, margin: '0 0.3rem' }}>pay</span>
+                          <span style={{ fontWeight: isCreditor ? '800' : '600', color: isCreditor ? 'var(--success)' : 'var(--text-primary)' }}>
+                            {isCreditor ? 'You' : debt.toUserName}
+                          </span>
+                        </div>
+                        <span style={{ fontWeight: '800', fontSize: '0.95rem', color: isDebtor ? 'var(--danger)' : isCreditor ? 'var(--success)' : 'var(--text-primary)' }}>
+                          ₹{debt.amount.toFixed(0)}
+                        </span>
+                      </div>
+                      
+                      {isDebtor && (
+                        <button
+                          className="btn-ghost"
+                          style={{
+                            padding: '0.35rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold',
+                            border: '1px solid var(--success)',
+                            color: 'var(--success)',
+                            width: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.3rem',
+                            marginTop: '0.2rem'
+                          }}
+                          onClick={() => {
+                            const targetMember = members.find(m => m.id === debt.toUserId);
+                            if (targetMember) {
+                              setSettleWithUser(targetMember);
+                              setSettleAmount(debt.amount.toFixed(2));
+                              setSettleSuccess(false);
+                              setShowSettleModal(true);
+                            }
+                          }}
+                        >
+                          <Wallet size={12} /> Quick Settle Up
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
 

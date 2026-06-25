@@ -1,70 +1,75 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
+const { FieldValue, FieldPath } = require('firebase-admin/firestore');
 const authMid = require('../middleware/authMiddleware');
 const socketService = require('../services/socketService');
+const { validateBody } = require('../middleware/validate');
+const { createGroupSchema, addMemberSchema, voteSchema } = require('../validation/groupValidation');
 
 router.use(authMid);
 
-router.post('/', async (req, res) => {
+router.post('/', validateBody(createGroupSchema), async (req, res, next) => {
     try {
         const { name, is_personal, members } = req.body;
-        
-        const connection = await db.getConnection();
-        await connection.beginTransaction();
+        const userId = req.user.userId;
+        const isAdminForPersonal = !!is_personal;
 
-        try {
-            const isAdminForPersonal = !!is_personal;
-            const [grpResult] = await connection.query(
-                'INSERT INTO expense_groups (name, is_personal, created_by, admin_id) VALUES (?, ?, ?, ?)', 
-                [name || 'Personal Group', isAdminForPersonal, req.user.userId, isAdminForPersonal ? req.user.userId : null]
-            );
-            const groupId = grpResult.insertId;
-            
-            const memberSet = new Set(members || []);
-            memberSet.add(req.user.userId);
+        const memberSet = new Set(members || []);
+        memberSet.add(userId);
+        const membersArray = Array.from(memberSet);
 
-            for (let uid of memberSet) {
-                await connection.query('INSERT INTO group_members (group_id, user_id) VALUES (?, ?)', [groupId, uid]);
-            }
-            
-            await connection.commit();
-            
-            // Notify members
-            const membersToNotify = Array.from(memberSet);
-            socketService.emitToGroup(groupId, membersToNotify, 'update_groups', { groupId, action: 'created' });
+        const newGroupRef = await db.collection('groups').add({
+            name: name || 'Personal Group',
+            is_personal: isAdminForPersonal,
+            created_by: userId,
+            admin_id: isAdminForPersonal ? userId : null,
+            members: membersArray,
+            created_at: FieldValue.serverTimestamp()
+        });
 
-            res.status(201).json({ message: 'Group created', groupId });
-        } catch (err) {
-            await connection.rollback();
-            throw err;
-        } finally {
-            connection.release();
-        }
+        const groupId = newGroupRef.id;
+
+        socketService.emitToGroup(groupId, membersArray, 'update_groups', { groupId, action: 'created' });
+
+        res.status(201).json({ message: 'Group created', groupId });
     } catch (err) {
-        res.status(500).json({ error: 'Database error' });
+        next(err);
     }
 });
 
-router.get('/', async (req, res) => {
+router.get('/', async (req, res, next) => {
     try {
-        const [groups] = await db.query(`
-            SELECT eg.*, COUNT(DISTINCT gm_all.user_id) as member_count
-            FROM expense_groups eg
-            JOIN group_members gm_me ON eg.id = gm_me.group_id
-            JOIN group_members gm_all ON eg.id = gm_all.group_id
-            WHERE gm_me.user_id = ?
-            GROUP BY eg.id
-            ORDER BY eg.created_at DESC
-        `, [req.user.userId]);
+        const userId = req.user.userId;
+        const snapshot = await db.collection('groups')
+            .where('members', 'array-contains', userId)
+            .get();
+
+        const groups = [];
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            groups.push({
+                id: doc.id,
+                ...data,
+                member_count: data.members ? data.members.length : 0,
+                created_at: data.created_at ? data.created_at.toDate() : null
+            });
+        });
+
+        // Sort in-memory descending by created_at
+        groups.sort((a, b) => {
+            const timeA = a.created_at ? a.created_at.getTime() : 0;
+            const timeB = b.created_at ? b.created_at.getTime() : 0;
+            return timeB - timeA;
+        });
+
         res.json({ groups });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
+        next(err);
     }
 });
 
-router.post('/:groupId/members', async (req, res) => {
+router.post('/:groupId/members', validateBody(addMemberSchema), async (req, res, next) => {
     try {
         const { email, userId } = req.body;
         const groupId = req.params.groupId;
@@ -72,82 +77,140 @@ router.post('/:groupId/members', async (req, res) => {
         let finalUserId = userId;
 
         if (!finalUserId && email) {
-            const [users] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
-            if (users.length === 0) return res.status(404).json({ error: 'User not found' });
-            finalUserId = users[0].id;
+            const usersSnap = await db.collection('users').where('email', '==', email).limit(1).get();
+            if (usersSnap.empty) return res.status(404).json({ error: 'User not found' });
+            finalUserId = usersSnap.docs[0].id;
         }
 
         if (!finalUserId) return res.status(400).json({ error: 'User identifier required' });
+
+        const groupRef = db.collection('groups').doc(groupId);
+        await groupRef.update({
+            members: FieldValue.arrayUnion(finalUserId)
+        });
+
+        const groupDoc = await groupRef.get();
+        const allMembers = groupDoc.data().members || [];
         
-        await db.query('INSERT IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)', [groupId, finalUserId]);
-        
-        // Notify the new member and existing members
-        const [allMembers] = await db.query('SELECT user_id FROM group_members WHERE group_id = ?', [groupId]);
-        const memberIds = allMembers.map(m => m.user_id);
-        socketService.emitToGroup(groupId, memberIds, 'update_groups', { groupId, action: 'member_added' });
+        socketService.emitToGroup(groupId, allMembers, 'update_groups', { groupId, action: 'member_added' });
 
         res.status(200).json({ message: 'Member added' });
     } catch (err) {
-        res.status(500).json({ error: 'Database error' });
+        next(err);
     }
 });
 
 router.get('/:groupId/members', async (req, res) => {
     try {
         const groupId = req.params.groupId;
-        const [members] = await db.query(`
-            SELECT u.id, u.username, u.email
-            FROM users u
-            JOIN group_members gm ON u.id = gm.user_id
-            WHERE gm.group_id = ?
-        `, [groupId]);
+        const groupDoc = await db.collection('groups').doc(groupId).get();
+        
+        if (!groupDoc.exists) return res.status(404).json({ error: 'Group not found' });
+        
+        const memberIds = groupDoc.data().members || [];
+        
+        if (memberIds.length === 0) return res.json({ members: [] });
+
+        // Firestore 'in' queries support max 30 items. We split if necessary.
+        const members = [];
+        for (let i = 0; i < memberIds.length; i += 30) {
+            const chunk = memberIds.slice(i, i + 30);
+            const usersSnap = await db.collection('users').where(FieldPath.documentId(), 'in', chunk).get();
+            usersSnap.forEach(doc => {
+                members.push({ id: doc.id, username: doc.data().username, email: doc.data().email });
+            });
+        }
+
         res.json({ members });
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: 'Database error' });
     }
 });
 
 router.get('/:groupId', async (req, res) => {
     try {
-        const [results] = await db.query('SELECT eg.*, u.username as admin_name FROM expense_groups eg LEFT JOIN users u ON eg.admin_id = u.id WHERE eg.id = ?', [req.params.groupId]);
-        if (results.length === 0) return res.status(404).json({ error: 'Group not found' });
-        res.json({ group: results[0] });
+        const groupId = req.params.groupId;
+        const groupDoc = await db.collection('groups').doc(groupId).get();
+        if (!groupDoc.exists) return res.status(404).json({ error: 'Group not found' });
+        
+        const groupData = groupDoc.data();
+        let admin_name = null;
+
+        if (groupData.admin_id) {
+            const adminDoc = await db.collection('users').doc(groupData.admin_id).get();
+            if (adminDoc.exists) {
+                admin_name = adminDoc.data().username;
+            }
+        }
+
+        res.json({ group: { id: groupDoc.id, ...groupData, admin_name } });
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: 'Database error' });
     }
 });
 
 // Admin Polling Routes
 
-router.get('/:groupId/active-poll', async (req, res) => {
+router.get('/:groupId/active-poll', async (req, res, next) => {
     try {
         const groupId = req.params.groupId;
-        const [polls] = await db.query(
-            'SELECT * FROM group_admin_polls WHERE group_id = ? AND status = "active" ORDER BY created_at DESC LIMIT 1',
-            [groupId]
-        );
+        const pollsSnap = await db.collection('groups').doc(groupId).collection('polls')
+            .where('status', '==', 'active')
+            .get();
         
-        if (polls.length === 0) return res.json({ poll: null });
+        if (pollsSnap.empty) return res.json({ poll: null });
 
-        const pollId = polls[0].id;
+        const polls = [];
+        pollsSnap.forEach(doc => {
+            polls.push({ id: doc.id, data: doc.data() });
+        });
 
-        // Get votes count per candidate
-        const [voteCounts] = await db.query(`
-            SELECT candidate_id, u.username as candidate_name, COUNT(*) as votes
-            FROM poll_votes pv
-            JOIN users u ON pv.candidate_id = u.id
-            WHERE poll_id = ?
-            GROUP BY candidate_id
-        `, [pollId]);
+        // Sort in-memory descending by created_at
+        polls.sort((a, b) => {
+            const timeA = a.data.created_at ? a.data.created_at.toDate().getTime() : 0;
+            const timeB = b.data.created_at ? b.data.created_at.toDate().getTime() : 0;
+            return timeB - timeA;
+        });
 
-        // Get user's own vote
-        const [myVote] = await db.query('SELECT candidate_id FROM poll_votes WHERE poll_id = ? AND voter_id = ?', [pollId, req.user.userId]);
+        const pollDoc = polls[0];
+        const pollId = pollDoc.id;
+        const pollData = pollDoc.data;
+
+        // Get votes
+        const votesSnap = await db.collection('groups').doc(groupId).collection('polls').doc(pollId).collection('votes').get();
+        
+        const voteCountsMap = {};
+        let myVote = null;
+
+        for (const voteDoc of votesSnap.docs) {
+            const vData = voteDoc.data();
+            if (vData.voter_id === req.user.userId) {
+                myVote = vData.candidate_id;
+            }
+            if (!voteCountsMap[vData.candidate_id]) {
+                voteCountsMap[vData.candidate_id] = 0;
+            }
+            voteCountsMap[vData.candidate_id]++;
+        }
+
+        const voteCounts = [];
+        for (const [candidateId, votes] of Object.entries(voteCountsMap)) {
+            const candDoc = await db.collection('users').doc(candidateId).get();
+            voteCounts.push({
+                candidate_id: candidateId,
+                candidate_name: candDoc.exists ? candDoc.data().username : 'Unknown',
+                votes: votes
+            });
+        }
 
         res.json({
             poll: {
-                ...polls[0],
+                id: pollId,
+                ...pollData,
                 votes: voteCounts,
-                myVote: myVote.length > 0 ? myVote[0].candidate_id : null
+                myVote: myVote
             }
         });
     } catch (err) {
@@ -161,77 +224,81 @@ router.post('/:groupId/poll', async (req, res) => {
         const groupId = req.params.groupId;
         const userId = req.user.userId;
 
+        const pollsRef = db.collection('groups').doc(groupId).collection('polls');
+        
         // Mark existing active polls as expired
-        await db.query('UPDATE group_admin_polls SET status = "expired" WHERE group_id = ? AND status = "active"', [groupId]);
+        const activePolls = await pollsRef.where('status', '==', 'active').get();
+        const batch = db.batch();
+        activePolls.forEach(doc => {
+            batch.update(doc.ref, { status: 'expired' });
+        });
+        await batch.commit();
 
         // Start new poll
-        const [result] = await db.query(
-            'INSERT INTO group_admin_polls (group_id, started_by) VALUES (?, ?)',
-            [groupId, userId]
-        );
+        const newPollRef = await pollsRef.add({
+            started_by: userId,
+            status: 'active',
+            created_at: FieldValue.serverTimestamp()
+        });
 
-        // Notify group members about new poll
-        const [members] = await db.query('SELECT user_id FROM group_members WHERE group_id = ?', [groupId]);
-        socketService.emitToGroup(groupId, members.map(m => m.user_id), 'update_poll', { groupId, pollId: result.insertId });
+        const groupDoc = await db.collection('groups').doc(groupId).get();
+        const members = groupDoc.exists ? groupDoc.data().members || [] : [];
+        
+        socketService.emitToGroup(groupId, members, 'update_poll', { groupId, pollId: newPollRef.id });
 
-        res.status(201).json({ message: 'Poll started', pollId: result.insertId });
+        res.status(201).json({ message: 'Poll started', pollId: newPollRef.id });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Database error' });
     }
 });
 
-router.post('/:groupId/vote', async (req, res) => {
+router.post('/:groupId/vote', validateBody(voteSchema), async (req, res, next) => {
     try {
         const groupId = req.params.groupId;
         const { pollId, candidateId } = req.body;
         const userId = req.user.userId;
 
-        // 1. Check if poll exists and is active
-        const [polls] = await db.query('SELECT status FROM group_admin_polls WHERE id = ?', [pollId]);
-        if (polls.length === 0 || polls[0].status !== 'active') {
+        const pollRef = db.collection('groups').doc(groupId).collection('polls').doc(pollId);
+        const pollDoc = await pollRef.get();
+
+        if (!pollDoc.exists || pollDoc.data().status !== 'active') {
             return res.status(400).json({ error: 'Poll is not active' });
         }
 
-        // 2. Cast or update vote
-        await db.query(`
-            INSERT INTO poll_votes (poll_id, voter_id, candidate_id)
-            VALUES (?, ?, ?)
-            ON DUPLICATE KEY UPDATE candidate_id = VALUES(candidate_id)
-        `, [pollId, userId, candidateId]);
+        // Cast or update vote
+        await pollRef.collection('votes').doc(userId).set({
+            voter_id: userId,
+            candidate_id: candidateId,
+            created_at: FieldValue.serverTimestamp()
+        });
 
-        // 3. Check for majority
-        const [memberCountResult] = await db.query('SELECT COUNT(*) as count FROM group_members WHERE group_id = ?', [groupId]);
-        const groupMemberCount = memberCountResult[0].count;
-        const majorityThreshold = Math.floor(groupMemberCount / 2) + 1;
+        // Check for majority
+        const groupDoc = await db.collection('groups').doc(groupId).get();
+        const members = groupDoc.data().members || [];
+        const majorityThreshold = Math.floor(members.length / 2) + 1;
 
-        const [voteCounts] = await db.query(
-            'SELECT COUNT(*) as count FROM poll_votes WHERE poll_id = ? AND candidate_id = ?',
-            [pollId, candidateId]
-        );
-        const currentVotes = voteCounts[0].count;
+        const votesSnap = await pollRef.collection('votes').where('candidate_id', '==', candidateId).get();
+        const currentVotes = votesSnap.size;
 
         if (currentVotes >= majorityThreshold) {
             // Majority reached! Promote to admin
-            await db.query('UPDATE expense_groups SET admin_id = ? WHERE id = ?', [candidateId, groupId]);
-            await db.query('UPDATE group_admin_polls SET status = "completed" WHERE id = ?', [pollId]);
+            const batch = db.batch();
+            batch.update(db.collection('groups').doc(groupId), { admin_id: candidateId });
+            batch.update(pollRef, { status: 'completed' });
+            await batch.commit();
             
-            // Notify members about admin update
-            const [members] = await db.query('SELECT user_id FROM group_members WHERE group_id = ?', [groupId]);
-            socketService.emitToGroup(groupId, members.map(m => m.user_id), 'update_groups', { groupId, action: 'admin_updated' });
-            socketService.emitToGroup(groupId, members.map(m => m.user_id), 'update_poll', { groupId, pollId, action: 'completed' });
+            socketService.emitToGroup(groupId, members, 'update_groups', { groupId, action: 'admin_updated' });
+            socketService.emitToGroup(groupId, members, 'update_poll', { groupId, pollId, action: 'completed' });
 
             return res.json({ message: 'Majority reached! Admin updated.', promoted: true });
         }
 
-        // Notify members about new vote
-        const [members] = await db.query('SELECT user_id FROM group_members WHERE group_id = ?', [groupId]);
-        socketService.emitToGroup(groupId, members.map(m => m.user_id), 'update_poll', { groupId, pollId, action: 'voted' });
+        socketService.emitToGroup(groupId, members, 'update_poll', { groupId, pollId, action: 'voted' });
 
         res.json({ message: 'Vote cast successfully', promoted: false });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
+        next(err);
     }
 });
 
@@ -240,15 +307,18 @@ router.post('/:groupId/leave', async (req, res) => {
         const groupId = req.params.groupId;
         const userId = req.user.userId;
 
-        await db.query('DELETE FROM group_members WHERE group_id = ? AND user_id = ?', [groupId, userId]);
+        const groupRef = db.collection('groups').doc(groupId);
+        await groupRef.update({
+            members: FieldValue.arrayRemove(userId)
+        });
         
-        // If no members left, delete the group
-        const [remaining] = await db.query('SELECT user_id FROM group_members WHERE group_id = ?', [groupId]);
+        const groupDoc = await groupRef.get();
+        const remaining = groupDoc.data().members || [];
+
         if (remaining.length === 0) {
-            await db.query('DELETE FROM expense_groups WHERE id = ?', [groupId]);
+            await groupRef.delete();
         } else {
-            // Notify remaining members
-            socketService.emitToGroup(groupId, remaining.map(m => m.user_id), 'update_groups', { groupId, action: 'member_left' });
+            socketService.emitToGroup(groupId, remaining, 'update_groups', { groupId, action: 'member_left' });
         }
         
         res.status(200).json({ message: 'Left group successfully' });
@@ -263,18 +333,19 @@ router.delete('/:groupId', async (req, res) => {
         const groupId = req.params.groupId;
         const userId = req.user.userId;
 
-        const [results] = await db.query('SELECT created_by FROM expense_groups WHERE id = ?', [groupId]);
-        if (results.length === 0) return res.status(404).json({ error: 'Group not found' });
+        const groupRef = db.collection('groups').doc(groupId);
+        const groupDoc = await groupRef.get();
+        
+        if (!groupDoc.exists) return res.status(404).json({ error: 'Group not found' });
 
-        if (results[0].created_by !== userId) {
+        if (groupDoc.data().created_by !== userId) {
             return res.status(403).json({ error: 'Only the creator can delete the group' });
         }
 
-        const [members] = await db.query('SELECT user_id FROM group_members WHERE group_id = ?', [groupId]);
-        await db.query('DELETE FROM expense_groups WHERE id = ?', [groupId]);
+        const members = groupDoc.data().members || [];
+        await groupRef.delete();
         
-        // Notify members before they lose access (room will still work for a moment)
-        socketService.emitToGroup(groupId, members.map(m => m.user_id), 'update_groups', { groupId, action: 'deleted' });
+        socketService.emitToGroup(groupId, members, 'update_groups', { groupId, action: 'deleted' });
 
         res.status(200).json({ message: 'Group deleted successfully' });
     } catch (err) {

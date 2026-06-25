@@ -27,7 +27,7 @@ app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps or curl)
         if (!origin) return callback(null, true);
-        
+
         const normalizedOrigin = origin.replace(/\/$/, '');
         if (allowedOrigins.includes(normalizedOrigin) || process.env.NODE_ENV !== 'production') {
             callback(null, true);
@@ -58,15 +58,20 @@ app.use('/api/expenses', require('./routes/expenses'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/notifications', require('./routes/notifications'));
 
-app.get('/api/health', async (req, res) => {
+app.get('/api/health', async (req, res, next) => {
     try {
         const db = require('./config/db');
-        await db.query('SELECT 1');
+        // Simple firestore health check
+        await db.collection('health').limit(1).get();
         res.json({ status: 'ok', message: 'backend and database are running.' });
     } catch (err) {
-        res.status(500).json({ status: 'error', message: 'Database connection failed', details: err.message });
+        next(err); // Delegate database errors to errorHandler
     }
 });
+
+// Centralized error handling middleware
+const errorHandler = require('./middleware/errorHandler');
+app.use(errorHandler);
 
 server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);

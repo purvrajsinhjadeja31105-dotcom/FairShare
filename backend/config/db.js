@@ -1,24 +1,38 @@
-const mysql = require('mysql2/promise');
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+const { getFirestore } = require('firebase-admin/firestore');
 require('dotenv').config();
 
-const pool = mysql.createPool(process.env.MYSQL_URL ? {
-    uri: process.env.MYSQL_URL,
-    ssl: { rejectUnauthorized: false },
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    connectTimeout: 10000
-} : {
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT || 3306,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASS,
-    database: process.env.DB_NAME,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    connectTimeout: 10000,
-    ssl: { rejectUnauthorized: false }
-});
+// Initialize Firebase Admin SDK
+if (getApps().length === 0) {
+    try {
+        let serviceAccount;
+        if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+            serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+        } else {
+            // Fallback to the local JSON file
+            try {
+                serviceAccount = require('../../fairshare-app-c1a76-firebase-adminsdk-fbsvc-8a15025dee.json');
+            } catch (e) {
+                console.warn("Could not load local service account file:", e.message);
+            }
+        }
 
-module.exports = pool;
+        if (serviceAccount) {
+            initializeApp({
+                credential: cert(serviceAccount)
+            });
+            console.log("Firebase initialized successfully with Service Account.");
+        } else {
+            // Fallback to application default credentials if available
+            initializeApp();
+            console.warn("Firebase initialized with Application Default Credentials.");
+        }
+    } catch (error) {
+        console.error("Firebase initialization error:", error);
+    }
+}
+
+const db = getFirestore();
+
+// Export firestore instance
+module.exports = db;

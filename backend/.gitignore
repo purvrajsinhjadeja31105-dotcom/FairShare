@@ -3,3 +3,7 @@ node_modules/
 backend.out.log
 npm-debug.log
 .DS_Store
+
+# SECURE: Ignore Firebase Service Account JSON files!
+fairshare-app-*.json
+firebase-adminsdk-*.json

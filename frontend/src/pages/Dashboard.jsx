@@ -35,6 +35,20 @@ const Dashboard = () => {
     const user = JSON.parse(localStorage.getItem('fairshare_user'));
     const [personalTotal, setPersonalTotal] = useState(0);
 
+    const updateDashboardCache = (newPart) => {
+        const cached = localStorage.getItem('fairshare_cache_dashboard');
+        let current = {};
+        if (cached) {
+            try {
+                current = JSON.parse(cached);
+            } catch (e) {}
+        }
+        localStorage.setItem('fairshare_cache_dashboard', JSON.stringify({
+            ...current,
+            ...newPart
+        }));
+    };
+
     const fetchPersonalTotal = async (allGroups) => {
         try {
             const personalGrp = allGroups.find(g => g.is_personal);
@@ -43,6 +57,7 @@ const Dashboard = () => {
                 const personalExps = recentData.recentExpenses.filter(e => e.group_id === personalGrp.id);
                 const total = personalExps.reduce((sum, e) => sum + parseFloat(e.amount), 0);
                 setPersonalTotal(total);
+                updateDashboardCache({ personalTotal: total });
             }
         } catch (err) {
             console.error(err);
@@ -50,6 +65,21 @@ const Dashboard = () => {
     };
 
     useEffect(() => {
+        // Try to load cached data for instant display without showing a blank screen/loader
+        const cached = localStorage.getItem('fairshare_cache_dashboard');
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                setGroups(parsed.groups || []);
+                setSummary(parsed.summary || { youOwe: [], youAreOwed: [] });
+                setRecentExpenses(parsed.recentExpenses || []);
+                setPersonalTotal(parsed.personalTotal || 0);
+                setLoading(false);
+            } catch (e) {
+                console.error("Error loading dashboard cache:", e);
+            }
+        }
+
         fetchGroups().then(data => {
             if (data?.groups) fetchPersonalTotal(data.groups);
         });
@@ -94,6 +124,7 @@ const Dashboard = () => {
         try {
             const data = await apiCall('/expenses/recent');
             setRecentExpenses(data.recentExpenses);
+            updateDashboardCache({ recentExpenses: data.recentExpenses });
         } catch (err) {
             console.error(err);
         }
@@ -103,6 +134,7 @@ const Dashboard = () => {
         try {
             const data = await apiCall('/groups');
             setGroups(data.groups);
+            updateDashboardCache({ groups: data.groups });
             return data;
         } catch (err) {
             console.error(err);
@@ -115,6 +147,7 @@ const Dashboard = () => {
         try {
             const data = await apiCall('/expenses/summary');
             setSummary(data);
+            updateDashboardCache({ summary: data });
         } catch (err) {
             console.error(err);
         }

@@ -1,0 +1,65 @@
+# Phase 2 Implementation Plan: Debt Simplification Algorithm
+
+This plan details the implementation of a **greedy transaction-minimizing algorithm** (similar to Splitwise's "Simplify Debts" feature) on the backend and updates the Group View frontend to display these smart settlement recommendations.
+
+---
+
+## Technical Concept: Greedy Debt Simplification
+When multiple members share expenses, it creates a complicated web of debts (e.g. A owes B, B owes C, C owes A). We can simplify this by looking only at each person's **net cumulative balance**:
+1. **Net Balances:** Sum all credits and debits for each user to get their single net balance (positive = they are owed money, negative = they owe money).
+2. **Classify Members:** Split members into two groups: **Debtors** (negative balance) and **Creditors** (positive balance).
+3. **Sort and Match:** Sort both groups in descending order of absolute amount. Match the largest debtor with the largest creditor:
+   - Determine transaction amount: `X = min(abs(debtor_balance), creditor_balance)`.
+   - Record settlement: `Debtor pays Creditor $X`.
+   - Update both balances and repeat until all balances are settled to 0.
+
+This algorithm settles all group debts in at most $N-1$ transactions (where $N$ is the number of group members), minimizing the number of payment transfers.
+
+---
+
+## Proposed Changes
+
+### Component 1: Backend Service & Route Integration
+
+We will build the core algorithm in a dedicated service and integrate it into the existing settlements route.
+
+#### [NEW] [debtSimplifier.js](file:///c:/CODING/Wed%20development/SplitWise/backend/services/debtSimplifier.js)
+Define a pure function `simplifyDebts(balances, memberNamesMap)` that implements the greedy settlement algorithm:
+- Takes the current group net balances (computed from expenses) and a map of user names.
+- Returns an array of simplified transactions:
+  `[{ fromUserId, fromUserName, toUserId, toUserName, amount }]`
+
+#### [MODIFY] [expenses.js](file:///c:/CODING/Wed%20development/SplitWise/backend/routes/expenses.js)
+- Import `simplifyDebts` service.
+- Update `router.get('/:groupId/settlements', ...)`:
+  - Query group members to build a `memberNamesMap`.
+  - Calculate `simplifiedDebts` using the service.
+  - Return `simplifiedDebts` as part of the JSON response: `{ balances, details, simplifiedDebts }`.
+
+---
+
+### Component 2: Frontend Settlements UI
+
+We will update the Group Details page to display the simplified debts to make it easy for users to settle up.
+
+#### [MODIFY] [GroupView.jsx](file:///c:/CODING/Wed%20development/SplitWise/frontend/src/pages/GroupView.jsx)
+- Introduce a state variable `simplifiedDebts` to store the algorithm's recommendations.
+- In `fetchGroupData()`, read `balData.simplifiedDebts` and call `setSimplifiedDebts(balData.simplifiedDebts)`.
+- Render a new visual card/widget named **"Suggested Settlement Plan"**:
+  - Displays a clean list of who should pay whom and how much (e.g. *"Rahul owes Priya ₹250"*).
+  - Includes a quick **"Settle Up"** button next to each suggestion that prepopulates the Settle modal, making payments immediate and frictionless.
+
+---
+
+## Verification Plan
+
+### Automated Verification
+We will run the server and trigger the settlement queries to make sure the algorithm outputs mathematical balances correctly.
+
+### Manual Verification
+1. Create a test group with 4 users (e.g. User A, User B, User C, User D).
+2. Create overlapping expenses:
+   - User A pays $100 split equally among A, B, C, D (A gets +$75, others get -$25).
+   - User B pays $50 split equally between B and A (B gets +$25, A gets -$25).
+3. The raw ledger would suggest B owes A, and A owes B. The debt simplifier should clean this up and recommend that C and D simply pay A $25 each, and B pays nothing.
+4. Verify that the frontend shows these suggestions correctly and the "Settle Up" buttons operate as expected.
