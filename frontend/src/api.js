@@ -17,13 +17,11 @@ export const apiCall = async (endpoint, method = 'GET', body = null) => {
 
     const fullUrl = `${API_URL}${endpoint}`;
     
-    // Log for debugging in production console
-    if (import.meta.env.DEV) {
-        console.log(`[API] ${method} ${fullUrl}`);
-    }
+    console.log(`[API Request] ${method} ${fullUrl}`, body ? body : '');
 
     try {
         const response = await fetch(fullUrl, config);
+        console.log(`[API Response] ${method} ${fullUrl} -> Status ${response.status}`);
         
         // Check Content-Type to avoid JSON parsing errors for HTML
         const contentType = response.headers.get("content-type");
@@ -34,19 +32,27 @@ export const apiCall = async (endpoint, method = 'GET', body = null) => {
                 if (data.details && Array.isArray(data.details) && data.details.length > 0) {
                     errMsg = data.details.map(d => d.message || d.field).join('. ');
                 }
-                throw new Error(errMsg);
+                const err = new Error(errMsg);
+                err.status = response.status;
+                err.details = data.details;
+                console.error(`[API Fail] ${method} ${fullUrl}:`, errMsg, data);
+                throw err;
             }
             return data;
         } else {
             // Handle non-JSON response (usually HTML 404/500)
             const text = await response.text();
-            console.error("Non-JSON API response at", endpoint, ":", text.substring(0, 200));
-            throw new Error(`Server error (${response.status}): Expected JSON but received ${contentType || 'text'}. Check console for details.`);
+            console.error("[API Non-JSON Response] at", endpoint, ":", text.substring(0, 200));
+            const err = new Error(`Server error (${response.status}): Received non-JSON response (${contentType || 'text'}).`);
+            err.status = response.status;
+            throw err;
         }
     } catch (error) {
         if (error instanceof TypeError) {
-            console.error("Fetch error - possible CORS issue or incorrect URL:", fullUrl, error);
-            throw new Error(`Connection failed. Please check if the API URL is correct and the server is running. (${fullUrl})`);
+            console.error("[API Network Error] Fetch error / CORS / Server down at:", fullUrl, error);
+            const err = new Error(`Connection failed. Server may be sleeping or unreachable (${fullUrl}).`);
+            err.status = 0;
+            throw err;
         }
         throw error;
     }

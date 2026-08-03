@@ -35,6 +35,23 @@ const Login = ({ setIsAuthenticated }) => {
         }
     };
 
+    const [resendMsg, setResendMsg] = useState('');
+    const [resending, setResending] = useState(false);
+
+    const handleResend = async () => {
+        if (!email) return;
+        setResending(true);
+        setResendMsg('');
+        try {
+            const data = await apiCall('/auth/resend-verification', 'POST', { email });
+            setResendMsg(data.message || 'Verification email sent!');
+        } catch (err) {
+            setResendMsg(err.message || 'Failed to resend verification email.');
+        } finally {
+            setResending(false);
+        }
+    };
+
     return (
         <div className="flex-center" style={{ padding: '2rem' }}>
             <div className="glass-card" style={{ maxWidth: '400px', width: '100%' }}>
@@ -55,10 +72,29 @@ const Login = ({ setIsAuthenticated }) => {
                         border: `1px solid ${unverified ? 'rgba(245, 158, 11, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`, 
                         padding: '0.75rem', borderRadius: '8px', marginBottom: '1.5rem', 
                         color: unverified ? '#f59e0b' : 'var(--danger)',
-                        fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem'
+                        fontSize: '0.9rem', display: 'flex', flexDirection: 'column', gap: '0.5rem'
                     }}>
-                        {unverified ? <AlertTriangle size={18} /> : <span>⚠️</span>}
-                        <span>{error}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            {unverified ? <AlertTriangle size={18} /> : <span>⚠️</span>}
+                            <span>{error}</span>
+                        </div>
+                        {unverified && (
+                            <button
+                                type="button"
+                                onClick={handleResend}
+                                disabled={resending}
+                                style={{
+                                    background: 'none', border: 'none', color: 'var(--accent-primary)',
+                                    cursor: 'pointer', textDecoration: 'underline', fontWeight: 'bold',
+                                    padding: 0, textAlign: 'left', fontSize: '0.85rem'
+                                }}
+                            >
+                                {resending ? 'Sending...' : 'Click here to resend verification email'}
+                            </button>
+                        )}
+                        {resendMsg && (
+                            <p style={{ margin: '0.25rem 0 0 0', color: 'var(--success)', fontSize: '0.85rem' }}>{resendMsg}</p>
+                        )}
                     </div>
                 )}
 
