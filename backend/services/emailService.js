@@ -27,7 +27,7 @@ transporter.verify((err) => {
 });
 
 const sendVerificationEmail = async (email, username, token) => {
-    const backendUrl = process.env.BACKEND_URL || 'http://localhost:5000';
+    const backendUrl = process.env.BACKEND_URL || (process.env.NODE_ENV === 'production' ? 'https://splitwise-lcur.onrender.com' : 'http://localhost:5000');
     const verificationUrl = `${backendUrl}/api/auth/verify?token=${token}`;
 
     console.log(`[Email] Attempting to send verification email to: ${email}`);
@@ -76,7 +76,7 @@ const sendVerificationEmail = async (email, username, token) => {
 };
 
 const sendPasswordResetEmail = async (email, username, token) => {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = process.env.FRONTEND_URL || (process.env.NODE_ENV === 'production' ? 'https://split-wise-dusky.vercel.app' : 'http://localhost:5173');
     const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
 
     console.log(`[Email] Attempting to send password reset email to: ${email}`);

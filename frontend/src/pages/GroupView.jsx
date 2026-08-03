@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Search, X, UserPlus, Users, LogOut, ArrowLeft, Activity, TrendingUp, TrendingDown, Clock, MoreVertical, Trash2, Plus, Vote, CheckCircle, AlertTriangle, Edit3, Wallet } from 'lucide-react';
 import { apiCall } from '../api';
 import { useSocket } from '../context/SocketContext';
+import { QRCodeSVG } from 'qrcode.react';
 
 const GroupView = () => {
   const { id } = useParams();
@@ -35,6 +36,8 @@ const GroupView = () => {
   const [settleAmount, setSettleAmount] = useState('');
   const [settleWithUser, setSettleWithUser] = useState(null);
   const [settleSuccess, setSettleSuccess] = useState(false);
+  const [manualUpi, setManualUpi] = useState('');
+  const [manualUpiError, setManualUpiError] = useState('');
 
   const [deleteModalInfo, setDeleteModalInfo] = useState({ show: false, expenseId: null });
 
@@ -323,6 +326,8 @@ const GroupView = () => {
     setSettleWithUser(null);
     setSettleAmount('');
     setSettleSuccess(false);
+    setManualUpi('');
+    setManualUpiError('');
   };
 
   const getUserName = (userId) => {
@@ -1006,6 +1011,8 @@ const GroupView = () => {
                     setSettleWithUser(null);
                     setSettleAmount('');
                     setSettleSuccess(false);
+                    setManualUpi('');
+                    setManualUpiError('');
                     setShowSettleModal(true);
                   }}
                 >
@@ -1084,6 +1091,8 @@ const GroupView = () => {
                               setSettleWithUser(targetMember);
                               setSettleAmount(debt.amount.toFixed(2));
                               setSettleSuccess(false);
+                              setManualUpi('');
+                              setManualUpiError('');
                               setShowSettleModal(true);
                             }
                           }}
@@ -1157,7 +1166,7 @@ const GroupView = () => {
                   </select>
                 </div>
 
-                {settleWithUser && (() => {
+                 {settleWithUser && (() => {
                   const bal = getNetBalanceWithUser(settleWithUser.id);
                   // Restrict to only when "I owe them" (bal < 0). 
                   // If bal > 0 (they owe me) or bal == 0, show settled message as requested.
@@ -1185,19 +1194,98 @@ const GroupView = () => {
                         </div>
                       </div>
 
-                      <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>
-                        How much do you want to pay?
-                      </label>
-                      <div style={{ position: 'relative' }}>
-                        <span style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}>₹</span>
-                        <input
-                          type="number" step="0.01" className="input-field"
-                          style={{ paddingLeft: '1.75rem', marginBottom: 0 }}
-                          value={settleAmount} onChange={e => setSettleAmount(e.target.value)}
-                          placeholder="0.00"
-                          required
-                        />
+                      <div style={{ marginBottom: '1rem' }}>
+                        <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.5rem' }}>
+                          How much do you want to pay?
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                          <span style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', opacity: 0.5 }}>₹</span>
+                          <input
+                            type="number" step="0.01" className="input-field"
+                            style={{ paddingLeft: '1.75rem', marginBottom: 0 }}
+                            value={settleAmount} onChange={e => setSettleAmount(e.target.value)}
+                            placeholder="0.00"
+                            required
+                          />
+                        </div>
                       </div>
+
+                      {!settleWithUser.upi_id && (
+                        <div style={{ marginBottom: '1rem' }}>
+                          <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.25rem' }}>
+                            Recipient hasn't set their UPI ID. Enter manually to generate QR:
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g. recipient@bank"
+                            className="input-field"
+                            style={{ marginBottom: 0, padding: '0.4rem 0.75rem', fontSize: '0.8rem' }}
+                            value={manualUpi}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setManualUpi(val);
+                              const upiRegex = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
+                              if (val && !upiRegex.test(val.trim())) {
+                                setManualUpiError('Invalid UPI ID format (e.g. name@upi)');
+                              } else {
+                                setManualUpiError('');
+                              }
+                            }}
+                          />
+                          {manualUpiError && <span style={{ fontSize: '0.7rem', color: 'var(--danger)' }}>{manualUpiError}</span>}
+                        </div>
+                      )}
+
+                      {(() => {
+                        const activeUpi = settleWithUser.upi_id || (manualUpi && !manualUpiError ? manualUpi.trim() : null);
+                        if (!activeUpi) return null;
+
+                        const numericAmount = parseFloat(settleAmount);
+                        const payAmount = isNaN(numericAmount) || numericAmount <= 0 ? Math.abs(bal).toFixed(2) : numericAmount.toFixed(2);
+                        const upiLink = `upi://pay?pa=${activeUpi}&pn=${encodeURIComponent(settleWithUser.username)}&am=${payAmount}&cu=INR&tn=FairShare%20Settlement`;
+
+                        return (
+                          <div className="glass-card" style={{ 
+                            marginTop: '1.25rem', 
+                            padding: '1.25rem', 
+                            display: 'flex', 
+                            flexDirection: 'column', 
+                            alignItems: 'center', 
+                            gap: '0.75rem',
+                            background: 'rgba(255,255,255,0.02)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '12px'
+                          }}>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--accent-primary)', textAlign: 'center' }}>
+                              Dynamic UPI QR Code
+                            </div>
+                            
+                            <div style={{ 
+                              background: '#ffffff', 
+                              padding: '0.75rem', 
+                              borderRadius: '10px', 
+                              boxShadow: '0 4px 10px rgba(0,0,0,0.1)', 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'center' 
+                            }}>
+                              <QRCodeSVG value={upiLink} size={150} />
+                            </div>
+
+                            <div style={{ textAlign: 'center' }}>
+                              <div style={{ fontSize: '0.75rem', fontWeight: '600' }}>
+                                Scan to pay ₹{payAmount}
+                              </div>
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                                UPI ID: <span style={{ fontWeight: 'bold', color: 'var(--text-primary)' }}>{activeUpi}</span>
+                              </div>
+                              <p style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', marginTop: '0.4rem', lineHeight: '1.3' }}>
+                                Scan this QR code using any UPI app. Once transfer is completed, click "Confirm Payment" below to update balances.
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })()}

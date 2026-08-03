@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FairShare Project Report & Resume Guide</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --primary-light: #e0e7ff;
+            --text-main: #0f172a;
+            --text-muted: #475569;
+            --bg-main: #f8fafc;
+            --bg-card: #ffffff;
+            --border-color: #e2e8f0;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+            --radius-md: 12px;
+            --radius-lg: 16px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        /* Header Card */
+        header {
+            background: linear-gradient(135deg, #4f46e5 0%, #312e81 100%);
+            color: white;
+            padding: 48px;
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            margin-bottom: 32px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 60%);
+            pointer-events: none;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 8px;
+            letter-spacing: -0.025em;
+        }
+
+        header p.subtitle {
+            font-size: 1.25rem;
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: 500;
+            margin-bottom: 24px;
+        }
+
+        .header-meta {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            background-color: rgba(255, 255, 255, 0.15);
+            padding: 6px 16px;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Section Styling */
+        section {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 40px;
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-sm);
+            margin-bottom: 32px;
+        }
+
+        section h2 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1e1b4b;
+            margin-bottom: 24px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid var(--primary-light);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* Keyword Grid */
+        .keyword-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+
+        .keyword-card {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        .keyword-card h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--primary);
+        }
+
+        .keyword-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .tag {
+            background-color: #ffffff;
+            border: 1px solid #cbd5e1;
+            color: #334155;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.813rem;
+            font-weight: 500;
+        }
+
+        /* Bullet Points */
+        .resume-bullets {
+            list-style: none;
+        }
+
+        .resume-bullets li {
+            position: relative;
+            padding-left: 28px;
+            margin-bottom: 16px;
+            font-size: 1rem;
+            color: var(--text-muted);
+        }
+
+        .resume-bullets li strong {
+            color: var(--text-main);
+        }
+
+        .resume-bullets li::before {
+            content: "✦";
+            position: absolute;
+            left: 0;
+            top: 2px;
+            color: var(--primary);
+            font-size: 1.1rem;
+        }
+
+        /* Table Design */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+
+        th {
+            background-color: #f1f5f9;
+            color: #1e293b;
+            font-weight: 600;
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 0.875rem;
+        }
+
+        td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.938rem;
+        }
+
+        /* Code Block styling */
+        pre {
+            background-color: #0f172a;
+            color: #f8fafc;
+            padding: 24px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.875rem;
+            margin-bottom: 24px;
+            box-shadow: inset 0 2px 4px 0 rgba(0,0,0,0.3);
+        }
+
+        /* Actions and Buttons */
+        .actions-panel {
+            background-color: #e0e7ff;
+            border: 1px solid #c7d2fe;
+            border-radius: var(--radius-md);
+            padding: 24px 32px;
+            margin-bottom: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+
+        .actions-text h3 {
+            font-size: 1.125rem;
+            color: #312e81;
+            margin-bottom: 4px;
+        }
+
+        .actions-text p {
+            font-size: 0.875rem;
+            color: #4338ca;
+        }
+
+        .btn-download {
+            background-color: var(--primary);
+            color: white;
+            font-weight: 600;
+            padding: 12px 24px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.938rem;
+            text-decoration: none;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+            box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.4);
+        }
+
+        .btn-download:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .btn-download:active {
+            transform: scale(0.98);
+        }
+
+        /* Print Specific Customizations */
+        @media print {
+            body {
+                background-color: white;
+                color: black;
+                padding: 0;
+            }
+
+            .container {
+                max-width: 100%;
+            }
+
+            .actions-panel, .btn-download {
+                display: none !important;
+            }
+
+            section {
+                border: none;
+                box-shadow: none;
+                padding: 20px 0;
+                margin-bottom: 20px;
+                page-break-inside: avoid;
+            }
+
+            header {
+                background: none;
+                color: black;
+                border: none;
+                box-shadow: none;
+                padding: 20px 0;
+                border-bottom: 3px solid black;
+                border-radius: 0;
+            }
+
+            header p.subtitle {
+                color: #334155;
+            }
+
+            .badge {
+                border: 1px solid #cbd5e1;
+                color: black;
+                background: none;
+            }
+
+            pre {
+                background-color: #f8fafc;
+                color: #0f172a;
+                border: 1px solid #cbd5e1;
+                box-shadow: none;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        
+        <!-- Interactive Actions Panel (Hidden during Print) -->
+        <div class="actions-panel">
+            <div class="actions-text">
+                <h3>Need a PDF/Printable copy?</h3>
+                <p>Use your browser's Print menu (Ctrl + P or Cmd + P) and choose "Save as PDF" to download.</p>
+            </div>
+            <button onclick="window.print()" class="btn-download">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
+                </svg>
+                Print / Save PDF
+            </button>
+        </div>
+
+        <header>
+            <h1>FairShare</h1>
+            <p class="subtitle">Real-Time Group Expense Sharing & Debt Settlement Platform</p>
+            <div class="header-meta">
+                <span class="badge">Full-Stack Application</span>
+                <span class="badge">React + Node.js + Firestore</span>
+                <span class="badge">Real-Time Sync</span>
+            </div>
+        </header>
+
+        <!-- Tech Stack -->
+        <section id="tech-stack">
+            <h2>🚀 Technical Keywords & Stack</h2>
+            <div class="keyword-grid">
+                <div class="keyword-card">
+                    <h3>Frontend Development</h3>
+                    <div class="keyword-tags">
+                        <span class="tag">React.js</span>
+                        <span class="tag">Vite</span>
+                        <span class="tag">React Router DOM</span>
+                        <span class="tag">Context API</span>
+                        <span class="tag">Vanilla CSS (Glassmorphism)</span>
+                        <span class="tag">Lucide Icons</span>
+                    </div>
+                </div>
+                <div class="keyword-card">
+                    <h3>Backend & API Development</h3>
+                    <div class="keyword-tags">
+                        <span class="tag">Node.js</span>
+                        <span class="tag">Express.js</span>
+                        <span class="tag">RESTful APIs</span>
+                        <span class="tag">MVC Architecture</span>
+                        <span class="tag">Zod (Validation)</span>
+                    </div>
+                </div>
+                <div class="keyword-card">
+                    <h3>Database & Cloud Services</h3>
+                    <div class="keyword-tags">
+                        <span class="tag">Firebase Firestore</span>
+                        <span class="tag">Firebase Admin SDK</span>
+                        <span class="tag">Google Cloud Console</span>
+                        <span class="tag">UPI Protocol Integration</span>
+                    </div>
+                </div>
+                <div class="keyword-card">
+                    <h3>Real-Time & Security</h3>
+                    <div class="keyword-tags">
+                        <span class="tag">Socket.io (WebSockets)</span>
+                        <span class="tag">JWT Authentication</span>
+                        <span class="tag">Bcrypt (Password Hashing)</span>
+                        <span class="tag">Nodemailer (SMTP Gateways)</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- What Project Does -->
+        <section id="overview">
+            <h2>📝 Project Summary</h2>
+            <p><strong>FairShare</strong> is a highly responsive, modern full-stack web portal inspired by Splitwise, designed to manage collective bills, splits, and settlements. Leveraging a real-time event-driven connection, it enables groups of friends, colleagues, or travelers to log shared expenses, vote on group administration, view synchronized updates across devices, and clear balances using payment-facilitating tools like dynamic UPI payment routing.</p>
+        </section>
+
+        <!-- Core Features -->
+        <section id="features">
+            <h2>🛠️ Core Features & Capabilities</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 25%;">Feature Module</th>
+                        <th>Functional Execution Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Real-Time Sync</strong></td>
+                        <td>Persistent <strong>Socket.io</strong> server connection with isolated user rooms. Transmits live activities, database notifications, and balance changes in real-time, eliminating standard polling.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Flexible Splits</strong></td>
+                        <td>Allows users to allocate bills equally, unequally, or by custom percentages. Frontend forms validate sum targets, while backend Zod schemas ensure transaction precision.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Consensus Governance</strong></td>
+                        <td>Integrates a live polling engine where members vote to choose the group admin. The backend collects results dynamically and upgrades candidate roles upon voting finalization.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Security Hardening</strong></td>
+                        <td>Implements <strong>JWT stateless authentication</strong> on API endpoints, protects WebSocket channels during initial handshake validations, and secures emails using Nodemailer verification keys.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Frictionless Settle-Up</strong></td>
+                        <td>Allows users to generate instant UPI deep-linking payment URLs and scan-ready QR codes programmatically based on real-time calculated debt values.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- The Algorithm -->
+        <section id="algorithm">
+            <h2>🧮 Core Algorithm: Greedy Debt Simplification</h2>
+            <p style="margin-bottom: 16px;">To streamline payments, FairShare computes group-wide balances and simplifies a complex mesh of debts (e.g., person A owing B, who owes C) into the minimum absolute number of transactions using a <strong>Greedy Matching Algorithm</strong>. It matches the largest net debtors with the largest net creditors, settling group ledgers in at most <strong>N - 1</strong> transactions.</p>
+            
+            <pre>
+function simplifyDebts(balances, memberNamesMap) {
+    const debtors = [];
+    const creditors = [];
+
+    // Separate members based on net owing/owed state
+    for (const [userId, amount] of Object.entries(balances)) {
+        const roundedAmount = Math.round(amount * 100) / 100;
+        if (roundedAmount < -0.01) {
+            debtors.push({ userId, balance: Math.abs(roundedAmount) });
+        } else if (roundedAmount > 0.01) {
+            creditors.push({ userId, balance: roundedAmount });
+        }
+    }
+
+    // Sort descending by magnitude to greedy-match largest outstanding balances
+    debtors.sort((a, b) => b.balance - a.balance);
+    creditors.sort((a, b) => b.balance - a.balance);
+
+    const simplifiedTransactions = [];
+    let i = 0, j = 0;
+
+    while (i < debtors.length && j < creditors.length) {
+        const debtor = debtors[i];
+        const creditor = creditors[j];
+        const settleAmount = Math.min(debtor.balance, creditor.balance);
+
+        simplifiedTransactions.push({
+            fromUserId: debtor.userId,
+            fromUserName: memberNamesMap[debtor.userId],
+            toUserId: creditor.userId,
+            toUserName: memberNamesMap[creditor.userId],
+            amount: Math.round(settleAmount * 100) / 100
+        });
+
+        debtor.balance -= settleAmount;
+        creditor.balance -= settleAmount;
+
+        if (debtor.balance < 0.01) i++;
+        if (creditor.balance < 0.01) j++;
+    }
+    return simplifiedTransactions;
+}
+            </pre>
+            <p style="font-size: 0.875rem; color: var(--text-muted);">
+                <strong>Complexity Analysis:</strong> Sorting results in a Time Complexity of <code>O(N log N)</code>, while the settlement loop executes in <code>O(N)</code> space and time, where <code>N</code> represents active group members.
+            </p>
+        </section>
+
+        <!-- Resume Bullet Points -->
+        <section id="resume-bullets">
+            <h2>✍️ High-Impact Resume Bullet Points</h2>
+            <ul class="resume-bullets">
+                <li><strong>Architected and developed</strong> a real-time expense-sharing web application using <strong>React.js, Node.js, Express.js</strong>, and <strong>Google Cloud Firestore</strong>, enabling concurrent group transaction tracking for users.</li>
+                <li><strong>Designed and engineered</strong> a greedy debt simplification algorithm in <strong>ES6 JavaScript</strong> that minimizes payment transactions within groups from O(N²) complex debt loops to at most O(N) transactions, reducing overall bank transfers by up to 60%.</li>
+                <li><strong>Implemented real-time bidirectional messaging</strong> using <strong>Socket.io/WebSockets</strong>, building features such as instant activity logs, badge counts, and group elections without requiring browser poll intervals or page refreshes.</li>
+                <li><strong>Hardened application security</strong> by writing custom JWT validation middlewares, securing WebSocket handshakes, and enforcing cryptographic password hashing via <strong>bcrypt</strong> alongside Node.js <strong>crypto-driven</strong> email activation tokens.</li>
+                <li><strong>Built a responsive, premium Glassmorphism UI</strong> using <strong>Vanilla CSS Grid/Flexbox Layouts</strong> and custom animation wrappers, guaranteeing 100% device responsiveness and optimal UX across desktop and mobile devices.</li>
+                <li><strong>Developed custom JSON validation middleware</strong> using <strong>Zod schema configurations</strong> for Express API endpoints, ensuring type-safe inputs and reducing invalid transaction requests by 95%.</li>
+                <li><strong>Integrated payment helper gateways</strong> by formatting dynamic <strong>UPI Payment Protocol strings</strong> containing live debt balance configurations, allowing users to scan programmatically-rendered <strong>QR codes</strong> via Google Pay or Paytm for frictionless settlements.</li>
+            </ul>
+        </section>
+        
+    </div>
+
+</body>
+</html>

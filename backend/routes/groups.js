@@ -6,6 +6,7 @@ const authMid = require('../middleware/authMiddleware');
 const socketService = require('../services/socketService');
 const { validateBody } = require('../middleware/validate');
 const { createGroupSchema, addMemberSchema, voteSchema } = require('../validation/groupValidation');
+const { checkGroupMembership } = require('../middleware/membershipMiddleware');
 
 router.use(authMid);
 
@@ -69,7 +70,7 @@ router.get('/', async (req, res, next) => {
     }
 });
 
-router.post('/:groupId/members', validateBody(addMemberSchema), async (req, res, next) => {
+router.post('/:groupId/members', checkGroupMembership, validateBody(addMemberSchema), async (req, res, next) => {
     try {
         const { email, userId } = req.body;
         const groupId = req.params.groupId;
@@ -100,12 +101,10 @@ router.post('/:groupId/members', validateBody(addMemberSchema), async (req, res,
     }
 });
 
-router.get('/:groupId/members', async (req, res) => {
+router.get('/:groupId/members', checkGroupMembership, async (req, res) => {
     try {
         const groupId = req.params.groupId;
-        const groupDoc = await db.collection('groups').doc(groupId).get();
-        
-        if (!groupDoc.exists) return res.status(404).json({ error: 'Group not found' });
+        const groupDoc = req.groupDoc;
         
         const memberIds = groupDoc.data().members || [];
         
@@ -117,7 +116,12 @@ router.get('/:groupId/members', async (req, res) => {
             const chunk = memberIds.slice(i, i + 30);
             const usersSnap = await db.collection('users').where(FieldPath.documentId(), 'in', chunk).get();
             usersSnap.forEach(doc => {
-                members.push({ id: doc.id, username: doc.data().username, email: doc.data().email });
+                members.push({ 
+                    id: doc.id, 
+                    username: doc.data().username, 
+                    email: doc.data().email,
+                    upi_id: doc.data().upi_id || null
+                });
             });
         }
 
@@ -128,13 +132,11 @@ router.get('/:groupId/members', async (req, res) => {
     }
 });
 
-router.get('/:groupId', async (req, res) => {
+router.get('/:groupId', checkGroupMembership, async (req, res) => {
     try {
         const groupId = req.params.groupId;
-        const groupDoc = await db.collection('groups').doc(groupId).get();
-        if (!groupDoc.exists) return res.status(404).json({ error: 'Group not found' });
-        
-        const groupData = groupDoc.data();
+        const groupDoc = req.groupDoc;
+        const groupData = req.group;
         let admin_name = null;
 
         if (groupData.admin_id) {
@@ -153,7 +155,7 @@ router.get('/:groupId', async (req, res) => {
 
 // Admin Polling Routes
 
-router.get('/:groupId/active-poll', async (req, res, next) => {
+router.get('/:groupId/active-poll', checkGroupMembership, async (req, res, next) => {
     try {
         const groupId = req.params.groupId;
         const pollsSnap = await db.collection('groups').doc(groupId).collection('polls')
@@ -219,7 +221,7 @@ router.get('/:groupId/active-poll', async (req, res, next) => {
     }
 });
 
-router.post('/:groupId/poll', async (req, res) => {
+router.post('/:groupId/poll', checkGroupMembership, async (req, res) => {
     try {
         const groupId = req.params.groupId;
         const userId = req.user.userId;
@@ -253,7 +255,7 @@ router.post('/:groupId/poll', async (req, res) => {
     }
 });
 
-router.post('/:groupId/vote', validateBody(voteSchema), async (req, res, next) => {
+router.post('/:groupId/vote', checkGroupMembership, validateBody(voteSchema), async (req, res, next) => {
     try {
         const groupId = req.params.groupId;
         const { pollId, candidateId } = req.body;
@@ -302,7 +304,7 @@ router.post('/:groupId/vote', validateBody(voteSchema), async (req, res, next) =
     }
 });
 
-router.post('/:groupId/leave', async (req, res) => {
+router.post('/:groupId/leave', checkGroupMembership, async (req, res) => {
     try {
         const groupId = req.params.groupId;
         const userId = req.user.userId;
@@ -328,7 +330,7 @@ router.post('/:groupId/leave', async (req, res) => {
     }
 });
 
-router.delete('/:groupId', async (req, res) => {
+router.delete('/:groupId', checkGroupMembership, async (req, res) => {
     try {
         const groupId = req.params.groupId;
         const userId = req.user.userId;

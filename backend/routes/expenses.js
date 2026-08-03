@@ -6,6 +6,7 @@ const authMid = require('../middleware/authMiddleware');
 const socketService = require('../services/socketService');
 const { validateBody } = require('../middleware/validate');
 const { createExpenseSchema, updateExpenseSchema, markWrongSchema, settleSchema } = require('../validation/expenseValidation');
+const { checkGroupMembership, checkExpenseGroupMembership } = require('../middleware/membershipMiddleware');
 
 router.use(authMid);
 
@@ -142,16 +143,14 @@ router.get('/recent', async (req, res, next) => {
     }
 });
 
-router.post('/:groupId', validateBody(createExpenseSchema), async (req, res, next) => {
+router.post('/:groupId', checkGroupMembership, validateBody(createExpenseSchema), async (req, res, next) => {
     try {
         const groupId = req.params.groupId;
         const { amount, description, splits, paidBy } = req.body;
         const payerId = paidBy || req.user.userId;
 
-        const groupDoc = await db.collection('groups').doc(groupId).get();
-        if (!groupDoc.exists) return res.status(404).json({ error: 'Group not found' });
-        
-        const group = groupDoc.data();
+        const groupDoc = req.groupDoc;
+        const group = req.group;
         if (!group.admin_id && !group.is_personal) {
             return res.status(403).json({ error: 'Cannot add expense: This group has no admin. Please elect one first.' });
         }
@@ -209,12 +208,12 @@ router.post('/:groupId', validateBody(createExpenseSchema), async (req, res, nex
     }
 });
 
-router.get('/:groupId/all', async (req, res, next) => {
+router.get('/:groupId/all', checkGroupMembership, async (req, res, next) => {
     try {
         const groupId = req.params.groupId;
         
         // Pre-fetch all group members in a single batch to cache usernames
-        const groupDoc = await db.collection('groups').doc(groupId).get();
+        const groupDoc = req.groupDoc;
         const memberIds = groupDoc.exists ? (groupDoc.data().members || []) : [];
         const userCache = {};
         if (memberIds.length > 0) {
@@ -279,8 +278,7 @@ const deleteUserEntriesInGroup = async (req, res) => {
     try {
         const { groupId, userId } = req.params;
 
-        const groupDoc = await db.collection('groups').doc(groupId).get();
-        if (!groupDoc.exists) return res.status(404).json({ error: 'Group not found' });
+        const groupDoc = req.groupDoc;
 
         const isGroupOwner = groupDoc.data().created_by === req.user.userId;
         const isTargetUser = userId === req.user.userId;
@@ -304,23 +302,20 @@ const deleteUserEntriesInGroup = async (req, res) => {
     }
 };
 
-router.delete('/:groupId/user/:userId/all', deleteUserEntriesInGroup);
-router.delete('/:groupId/user/:userId', deleteUserEntriesInGroup);
+router.delete('/:groupId/user/:userId/all', checkGroupMembership, deleteUserEntriesInGroup);
+router.delete('/:groupId/user/:userId', checkGroupMembership, deleteUserEntriesInGroup);
 
-router.delete('/:expenseId', async (req, res) => {
+router.delete('/:expenseId', checkExpenseGroupMembership, async (req, res) => {
     try {
         const expenseId = req.params.expenseId;
-        const expDoc = await db.collection('expenses').doc(expenseId).get();
-        
-        if (!expDoc.exists) return res.status(404).json({ error: 'Expense not found' });
-        
-        const expense = expDoc.data();
+        const expDoc = req.expenseDoc;
+        const expense = req.expense;
         if (expense.paid_by !== req.user.userId) {
             return res.status(403).json({ error: 'Permission denied: Only the expense creator can delete this.' });
         }
 
         const groupId = expense.group_id;
-        const groupDoc = await db.collection('groups').doc(groupId).get();
+        const groupDoc = req.groupDoc;
         const members = groupDoc.exists ? groupDoc.data().members || [] : [];
 
         await expDoc.ref.delete();
@@ -352,17 +347,16 @@ router.delete('/:expenseId', async (req, res) => {
     }
 });
 
-router.put('/:expenseId', validateBody(updateExpenseSchema), async (req, res, next) => {
+router.put('/:expenseId', checkExpenseGroupMembership, validateBody(updateExpenseSchema), async (req, res, next) => {
     try {
         const expenseId = req.params.expenseId;
         const { amount, description, splits } = req.body;
         const userId = req.user.userId;
 
-        const expDoc = await db.collection('expenses').doc(expenseId).get();
-        if (!expDoc.exists) return res.status(404).json({ error: 'Expense not found' });
-        const expense = expDoc.data();
+        const expDoc = req.expenseDoc;
+        const expense = req.expense;
 
-        const groupDoc = await db.collection('groups').doc(expense.group_id).get();
+        const groupDoc = req.groupDoc;
         const admin_id = groupDoc.exists ? groupDoc.data().admin_id : null;
 
         if (expense.paid_by !== userId && admin_id !== userId) {
@@ -398,17 +392,16 @@ router.put('/:expenseId', validateBody(updateExpenseSchema), async (req, res, ne
     }
 });
 
-router.post('/:expenseId/mark-wrong', validateBody(markWrongSchema), async (req, res, next) => {
+router.post('/:expenseId/mark-wrong', checkExpenseGroupMembership, validateBody(markWrongSchema), async (req, res, next) => {
     try {
         const expenseId = req.params.expenseId;
         const { isWrong } = req.body;
         const userId = req.user.userId;
 
-        const expDoc = await db.collection('expenses').doc(expenseId).get();
-        if (!expDoc.exists) return res.status(404).json({ error: 'Expense not found' });
-        const expense = expDoc.data();
+        const expDoc = req.expenseDoc;
+        const expense = req.expense;
 
-        const groupDoc = await db.collection('groups').doc(expense.group_id).get();
+        const groupDoc = req.groupDoc;
         if (!groupDoc.exists || groupDoc.data().admin_id !== userId) {
             return res.status(403).json({ error: 'Only the group admin can mark entries as wrong.' });
         }
@@ -446,7 +439,7 @@ router.post('/:expenseId/mark-wrong', validateBody(markWrongSchema), async (req,
     }
 });
 
-router.post('/:expenseId/hide', async (req, res) => {
+router.post('/:expenseId/hide', checkExpenseGroupMembership, async (req, res) => {
     try {
         const expenseId = req.params.expenseId;
         const userId = req.user.userId;
@@ -462,12 +455,12 @@ router.post('/:expenseId/hide', async (req, res) => {
     }
 });
 
-router.get('/:groupId/settlements', async (req, res, next) => {
+router.get('/:groupId/settlements', checkGroupMembership, async (req, res, next) => {
     try {
         const groupId = req.params.groupId;
 
         // Fetch the group and pre-fetch all member profiles in a single batch to cache usernames
-        const groupDoc = await db.collection('groups').doc(groupId).get();
+        const groupDoc = req.groupDoc;
         const memberIds = groupDoc.exists ? (groupDoc.data().members || []) : [];
         const userCache = {};
         if (memberIds.length > 0) {
@@ -525,7 +518,7 @@ router.get('/:groupId/settlements', async (req, res, next) => {
     }
 });
 
-router.post('/:groupId/settle', validateBody(settleSchema), async (req, res, next) => {
+router.post('/:groupId/settle', checkGroupMembership, validateBody(settleSchema), async (req, res, next) => {
     try {
         const groupId = req.params.groupId;
         const { toUserId, fromUserId, amount } = req.body;
@@ -548,7 +541,7 @@ router.post('/:groupId/settle', validateBody(settleSchema), async (req, res, nex
             created_at: FieldValue.serverTimestamp()
         });
 
-        const groupDoc = await db.collection('groups').doc(groupId).get();
+        const groupDoc = req.groupDoc;
         const members = groupDoc.exists ? groupDoc.data().members || [] : [];
 
         socketService.emitToGroup(groupId, members, 'update_expenses', { groupId, action: 'settled' });

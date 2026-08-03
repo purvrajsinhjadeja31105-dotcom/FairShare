@@ -21,7 +21,9 @@ export const SocketProvider = ({ children }) => {
 
     useEffect(() => {
         if (token) {
-            const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
+            const socketUrl = import.meta.env.VITE_SOCKET_URL ||
+                (import.meta.env.VITE_API_BASE_URL ? import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, '') : null) ||
+                (import.meta.env.DEV ? 'http://localhost:5000' : 'https://splitwise-lcur.onrender.com');
             const newSocket = io(socketUrl, {
                 auth: { token }
             });

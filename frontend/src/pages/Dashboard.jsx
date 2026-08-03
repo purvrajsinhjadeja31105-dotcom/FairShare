@@ -35,6 +35,42 @@ const Dashboard = () => {
     const user = JSON.parse(localStorage.getItem('fairshare_user'));
     const [personalTotal, setPersonalTotal] = useState(0);
 
+    // UPI Settings state
+    const [upiId, setUpiId] = useState(user?.upi_id || '');
+    const [isEditingUpi, setIsEditingUpi] = useState(false);
+    const [upiInput, setUpiInput] = useState(user?.upi_id || '');
+    const [upiError, setUpiError] = useState('');
+    const [savingUpi, setSavingUpi] = useState(false);
+
+    const handleSaveUpi = async (e) => {
+        e.preventDefault();
+        setSavingUpi(true);
+        setUpiError('');
+
+        const cleanUpi = upiInput ? upiInput.trim() : '';
+
+        // UPI Regex Validation: alphanumeric with dot/hyphen/underscore before @, bank code after
+        const upiRegex = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
+        if (cleanUpi && !upiRegex.test(cleanUpi)) {
+            setUpiError('Invalid UPI ID format (e.g. name@upi or phone@ybl)');
+            setSavingUpi(false);
+            return;
+        }
+
+        try {
+            const res = await apiCall('/users/profile', 'PUT', { upi_id: cleanUpi });
+            setUpiId(res.upi_id || '');
+            const updatedUser = { ...user, upi_id: res.upi_id || null };
+            localStorage.setItem('fairshare_user', JSON.stringify(updatedUser));
+            setIsEditingUpi(false);
+            alert('UPI ID updated successfully!');
+        } catch (err) {
+            setUpiError(err.message || 'Failed to update UPI ID');
+        } finally {
+            setSavingUpi(false);
+        }
+    };
+
     const updateDashboardCache = (newPart) => {
         const cached = localStorage.getItem('fairshare_cache_dashboard');
         let current = {};
@@ -400,6 +436,63 @@ const Dashboard = () => {
 
                 {/* Right Side: Financial Summary and Activity */}
                 <div style={{ flex: '1.5', minWidth: 'min(100%, 300px)', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                    {/* UPI Settings Card */}
+                    <div className="glass-card" style={{ padding: '1.25rem', border: '1px solid var(--border-color)' }}>
+                        <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1rem', marginBottom: '0.75rem' }}>
+                            <Wallet size={18} className="text-gradient" /> UPI Payment Settings
+                        </h3>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: '1.4' }}>
+                            Save your UPI ID to receive payments during settlements. Other group members will scan a dynamically generated QR code targeting this address.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            {isEditingUpi ? (
+                                <form onSubmit={handleSaveUpi} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                    <input
+                                        type="text"
+                                        placeholder="Enter UPI ID (e.g. user@bank)"
+                                        className="input-field"
+                                        value={upiInput}
+                                        onChange={(e) => setUpiInput(e.target.value)}
+                                        style={{ marginBottom: 0 }}
+                                        required
+                                    />
+                                    {upiError && <span style={{ fontSize: '0.7rem', color: 'var(--danger)' }}>{upiError}</span>}
+                                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+                                        <button type="submit" className="btn-primary" style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }} disabled={savingUpi}>
+                                            {savingUpi ? 'Saving...' : 'Save'}
+                                        </button>
+                                        <button 
+                                            type="button" 
+                                            className="btn-ghost" 
+                                            style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }} 
+                                            onClick={() => { 
+                                                setIsEditingUpi(false); 
+                                                setUpiInput(upiId || ''); 
+                                                setUpiError(''); 
+                                            }}
+                                        >
+                                            Cancel
+                                        </button>
+                                    </div>
+                                </form>
+                            ) : (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ wordBreak: 'break-all', flex: 1, marginRight: '0.5rem' }}>
+                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>UPI ID:</span>{' '}
+                                        <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{upiId || 'Not Set'}</span>
+                                    </div>
+                                    <button 
+                                        className="btn-ghost" 
+                                        style={{ padding: '0.4rem 0.8rem', fontSize: '0.75rem', height: 'auto', border: '1px solid var(--border-color)' }} 
+                                        onClick={() => setIsEditingUpi(true)}
+                                    >
+                                        {upiId ? 'Edit' : 'Set UPI ID'}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
                     {/* Personal Spending Summary */}
                     <div
                         className="glass-card"
