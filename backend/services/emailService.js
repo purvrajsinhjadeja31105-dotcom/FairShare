@@ -14,7 +14,6 @@ const transportConfig = process.env.EMAIL_HOST ? {
     host: process.env.EMAIL_HOST,
     port: Number(process.env.EMAIL_PORT) || 465,
     secure: Number(process.env.EMAIL_PORT) === 465 || !process.env.EMAIL_PORT,
-    pool: true,
     auth: {
         user: emailUser,
         pass: emailPass
@@ -26,7 +25,6 @@ const transportConfig = process.env.EMAIL_HOST ? {
     }
 } : {
     service: 'gmail',
-    pool: true,
     auth: {
         user: emailUser,
         pass: emailPass

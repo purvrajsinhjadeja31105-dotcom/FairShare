@@ -31,17 +31,21 @@ router.post('/register', validateBody(registerSchema), async (req, res, next) =>
         });
 
         // Send verification email
+        let emailSent = true;
         try {
             await emailService.sendVerificationEmail(email, username, verification_token);
             console.log(`[Auth] Verification email triggered for: ${email}`);
         } catch (emailErr) {
             console.error('[Auth] Failed to trigger verification email:', emailErr);
-            // We still registered the user, but they might need a "resend" button later
+            emailSent = false;
         }
 
         res.status(201).json({ 
-            message: 'Registration successful! Please check your email to verify your account.', 
-            user: { id: newUserRef.id, username, email } 
+            message: emailSent 
+                ? 'Registration successful! Please check your email to verify your account.' 
+                : 'Registration successful, but email delivery failed. Please click "Resend Verification" on the login page.', 
+            user: { id: newUserRef.id, username, email },
+            emailSent
         });
     } catch (err) {
         next(err);
