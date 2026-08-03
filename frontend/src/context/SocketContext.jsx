@@ -23,7 +23,7 @@ export const SocketProvider = ({ children }) => {
         if (token) {
             const socketUrl = import.meta.env.VITE_SOCKET_URL ||
                 (import.meta.env.VITE_API_BASE_URL ? import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, '') : null) ||
-                (import.meta.env.DEV ? 'http://localhost:5000' : 'https://splitwise-lcur.onrender.com');
+                (import.meta.env.DEV ? 'http://localhost:5000' : 'https://fairshare-backend-9bgf.onrender.com');
             const newSocket = io(socketUrl, {
                 auth: { token }
             });

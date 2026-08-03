@@ -94,7 +94,7 @@ router.get('/verify', async (req, res, next) => {
             verification_token: null
         });
 
-        const frontendUrl = process.env.FRONTEND_URL || (process.env.NODE_ENV === 'production' ? 'https://split-wise-dusky.vercel.app' : 'http://localhost:5173');
+        const frontendUrl = process.env.FRONTEND_URL || (process.env.NODE_ENV === 'production' ? 'https://fair-share-sage.vercel.app' : 'http://localhost:5173');
 
         res.send(`
             <div style="font-family: sans-serif; text-align: center; padding: 50px; background: #f8fafc; min-height: 100vh;">
