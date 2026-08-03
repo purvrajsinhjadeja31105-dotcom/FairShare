@@ -7,23 +7,42 @@ if (typeof dns.setDefaultResultOrder === 'function') {
     dns.setDefaultResultOrder('ipv4first');
 }
 
-const transporter = nodemailer.createTransport({
+const emailUser = process.env.EMAIL_USER;
+const emailPass = process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '') : '';
+
+const transportConfig = process.env.EMAIL_HOST ? {
+    host: process.env.EMAIL_HOST,
+    port: Number(process.env.EMAIL_PORT) || 465,
+    secure: Number(process.env.EMAIL_PORT) === 465 || !process.env.EMAIL_PORT,
+    pool: true,
+    auth: {
+        user: emailUser,
+        pass: emailPass
+    },
+    debug: process.env.NODE_ENV !== 'production',
+    logger: true,
+    tls: {
+        rejectUnauthorized: false
+    }
+} : {
     service: 'gmail',
     pool: true,
     auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
+        user: emailUser,
+        pass: emailPass
     },
-    debug: process.env.NODE_ENV !== 'production', // Detailed logs in dev, lighter in prod
+    debug: process.env.NODE_ENV !== 'production',
     logger: true,
     tls: {
-        rejectUnauthorized: false // Helps avoid handshake errors on cloud platforms
+        rejectUnauthorized: false
     }
-});
+};
+
+const transporter = nodemailer.createTransport(transportConfig);
 
 transporter.verify((err) => {
     if (err) console.error("[Email] Transporter Verify Error:", err);
-    else console.log("[Email] Server is ready to take messages");
+    else console.log("[Email] Transporter is ready to send messages via", process.env.EMAIL_HOST || 'gmail');
 });
 
 const sendVerificationEmail = async (email, username, token) => {

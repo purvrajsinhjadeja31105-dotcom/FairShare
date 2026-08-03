@@ -110,6 +110,38 @@ router.get('/verify', async (req, res, next) => {
     }
 });
 
+// Resend verification email route
+router.post('/resend-verification', async (req, res, next) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ error: 'Email is required' });
+
+        const usersSnapshot = await db.collection('users').where('email', '==', email).limit(1).get();
+        if (usersSnapshot.empty) {
+            return res.json({ message: 'If that email is registered and unverified, a verification email has been sent.' });
+        }
+
+        const userDoc = usersSnapshot.docs[0];
+        const user = userDoc.data();
+
+        if (user.is_verified) {
+            return res.status(400).json({ error: 'This account is already verified. Please log in.' });
+        }
+
+        let token = user.verification_token;
+        if (!token) {
+            token = crypto.randomBytes(32).toString('hex');
+            await userDoc.ref.update({ verification_token: token });
+        }
+
+        await emailService.sendVerificationEmail(email, user.username, token);
+        res.json({ message: 'Verification email sent! Please check your inbox (including spam folder).' });
+    } catch (err) {
+        console.error('[Auth] Resend verification error:', err);
+        res.status(500).json({ error: 'Failed to send verification email. Please try again later.' });
+    }
+});
+
 
 router.post('/forgot-password', validateBody(forgotPasswordSchema), async (req, res, next) => {
     try {
