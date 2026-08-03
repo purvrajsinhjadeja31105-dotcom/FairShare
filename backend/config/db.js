@@ -6,14 +6,28 @@ require('dotenv').config();
 if (getApps().length === 0) {
     try {
         let serviceAccount;
-        if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
-            serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
-        } else {
+        const rawKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || 
+                       process.env.FIREBASE_SERVICE_ACCOUNT || 
+                       process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+
+        if (rawKey) {
+            try {
+                serviceAccount = typeof rawKey === 'object' ? rawKey : JSON.parse(rawKey);
+            } catch (e) {
+                try {
+                    serviceAccount = JSON.parse(Buffer.from(rawKey, 'base64').toString('utf8'));
+                } catch (b64Err) {
+                    console.error("[DB] Failed to parse FIREBASE_SERVICE_ACCOUNT environment variable:", e.message);
+                }
+            }
+        }
+
+        if (!serviceAccount) {
             // Fallback to the local JSON file
             try {
                 serviceAccount = require('../../fairshare-app-c1a76-firebase-adminsdk-fbsvc-8a15025dee.json');
             } catch (e) {
-                console.warn("Could not load local service account file:", e.message);
+                console.warn("[DB] Could not load local service account file:", e.message);
             }
         }
 
@@ -21,14 +35,13 @@ if (getApps().length === 0) {
             initializeApp({
                 credential: cert(serviceAccount)
             });
-            console.log("Firebase initialized successfully with Service Account.");
+            console.log("[DB] Firebase initialized successfully with Service Account.");
         } else {
-            // Fallback to application default credentials if available
+            console.error("[DB] CRITICAL: No Firebase Service Account Key found! Database operations will fail on cloud environment.");
             initializeApp();
-            console.warn("Firebase initialized with Application Default Credentials.");
         }
     } catch (error) {
-        console.error("Firebase initialization error:", error);
+        console.error("[DB] Firebase initialization error:", error);
     }
 }
 
