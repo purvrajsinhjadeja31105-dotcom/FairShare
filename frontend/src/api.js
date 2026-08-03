@@ -30,7 +30,11 @@ export const apiCall = async (endpoint, method = 'GET', body = null) => {
         if (contentType && contentType.includes("application/json")) {
             const data = await response.json();
             if (!response.ok) {
-                throw new Error(data.error || `Error ${response.status}: Something went wrong`);
+                let errMsg = data.error || data.message || `Error ${response.status}: Something went wrong`;
+                if (data.details && Array.isArray(data.details) && data.details.length > 0) {
+                    errMsg = data.details.map(d => d.message || d.field).join('. ');
+                }
+                throw new Error(errMsg);
             }
             return data;
         } else {
