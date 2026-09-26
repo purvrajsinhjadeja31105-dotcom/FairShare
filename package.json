@@ -1,0 +1,14 @@
+{
+  "name": "fairshare",
+  "private": true,
+  "scripts": {
+    "setup": "npm install && npm --prefix backend install && npm --prefix frontend install",
+    "dev": "concurrently --kill-others-on-fail -n api,web -c blue,magenta \"npm --prefix backend run dev:local\" \"wait-on -t 180000 tcp:127.0.0.1:5000 && npm --prefix frontend run dev\"",
+    "test": "npm --prefix backend test",
+    "lint": "npm --prefix frontend run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "wait-on": "^9.1.0"
+  }
+}

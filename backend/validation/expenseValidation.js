@@ -1,34 +1,39 @@
 const { z } = require('zod');
+const { roundMoney } = require('../utils/money');
+const { checkExpenseSplits } = require('../services/expenseRules');
 
-// Helper to coerce string amounts to numbers and validate positivity
-const positiveAmount = z.union([z.number(), z.string()])
-    .transform((val) => {
-        const parsed = parseFloat(val);
-        return isNaN(parsed) ? 0 : parsed;
-    })
-    .refine((val) => val > 0, { message: 'Amount must be greater than 0' });
+// Coerces string/number input to a rupee amount rounded to 2 decimals (NaN when unparseable)
+const money = z.union([z.number(), z.string()])
+    .transform((val) => roundMoney(val));
+
+const positiveAmount = money
+    .refine((val) => Number.isFinite(val) && val > 0, { message: 'Amount must be greater than 0' });
 
 const splitSchema = z.object({
     userId: z.string().min(1, 'User ID in split is required'),
-    amount_owed: z.union([z.number(), z.string()])
-        .transform((val) => {
-            const parsed = parseFloat(val);
-            return isNaN(parsed) ? 0 : parsed;
-        })
+    amount_owed: money
+        .refine((val) => Number.isFinite(val) && val >= 0, { message: 'Split amount must be a number of 0 or more' })
 });
+
+// Splits must add up exactly to the expense total; runs only when both are present
+const splitsMatchTotal = (data, ctx) => {
+    if (data.amount === undefined || data.splits === undefined) return;
+    const problem = checkExpenseSplits(data);
+    if (problem) ctx.addIssue({ code: 'custom', path: ['splits'], message: problem });
+};
 
 const createExpenseSchema = z.object({
     amount: positiveAmount,
     description: z.string().trim().min(1, 'Description is required').max(255),
     splits: z.array(splitSchema).min(1, 'At least one split is required'),
     paidBy: z.string().optional()
-});
+}).superRefine(splitsMatchTotal);
 
 const updateExpenseSchema = z.object({
     amount: positiveAmount.optional(),
     description: z.string().trim().min(1, 'Description cannot be empty').max(255).optional(),
-    splits: z.array(splitSchema).optional()
-});
+    splits: z.array(splitSchema).min(1, 'At least one split is required').optional()
+}).superRefine(splitsMatchTotal);
 
 const markWrongSchema = z.object({
     isWrong: z.boolean({ required_error: 'isWrong boolean status is required' })
@@ -40,7 +45,12 @@ const settleSchema = z.object({
     amount: positiveAmount
 });
 
+const settlementActionSchema = z.object({
+    action: z.enum(['confirm', 'reject'], { message: 'action must be "confirm" or "reject"' })
+});
+
 module.exports = {
+    settlementActionSchema,
     createExpenseSchema,
     updateExpenseSchema,
     markWrongSchema,

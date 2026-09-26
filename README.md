@@ -46,7 +46,8 @@ A full-stack, real-time expense sharing application inspired by Splitwise, desig
 - Express.js
 
 **Database**
-- MySQL
+- Cloud Firestore (Firebase Admin SDK)
+- Firestore Emulator for local development
 
 **Real-Time**
 - Socket.io
@@ -77,14 +78,13 @@ A full-stack, real-time expense sharing application inspired by Splitwise, desig
 
 ## 📊 Database Design
 
-The application uses a relational database with the following tables:
+The application uses Cloud Firestore with the following collections:
 
-- `users` – User details and authentication data  
-- `expense_groups` – Group information  
-- `group_members` – User-group relationships  
-- `expenses` – Expense records  
-- `expense_splits` – Expense distribution logic  
-- `notifications` – User activity tracking  
+- `users` – User details and authentication data
+- `groups` – Group information, member IDs and the elected admin
+- `expenses` – Expense records with their per-member splits embedded
+- `notifications` – User activity alerts
+- `polls` / `votes` – Admin elections
 
 ---
 
@@ -94,6 +94,33 @@ The application uses a relational database with the following tables:
 - JWT-based authentication for APIs
 - Email verification with secure tokens
 - Authenticated Socket.io connections
+
+---
+
+## 💻 Run Locally
+
+Local development uses the **Firestore emulator**, so nothing you do on your machine touches production data.
+
+**Prerequisites:** Node.js 22+, Java 11+ (required by the Firestore emulator)
+
+```bash
+npm run setup                               # install root, backend and frontend dependencies
+cp backend/.env.example backend/.env        # then set JWT_SECRET to any long random string
+cp frontend/.env.example frontend/.env
+npm run dev                                 # emulator + seeded demo data + backend + frontend
+```
+
+| What | URL |
+|---|---|
+| App | http://localhost:5173 |
+| API | http://localhost:5000/api |
+| Emulator UI (browse the database) | http://localhost:4000 |
+
+Demo logins (reset on every `npm run dev`): `asha@example.com`, `bala@example.com`, `chen@example.com`, all with password `password123`.
+
+With `EMAIL_MODE=console`, verification and password-reset links are printed in the terminal instead of being emailed.
+
+**Tests:** `npm test` (backend unit tests) · `npm --prefix backend run test:api` (API tests on the emulator) · `npm run lint` (frontend)
 
 ---
 

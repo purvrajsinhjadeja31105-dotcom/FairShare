@@ -1,23 +1,42 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Search, X, UserPlus, Users, LogOut, ArrowLeft, Activity, TrendingUp, TrendingDown, Clock, MoreVertical, Trash2, Plus, Vote, CheckCircle, AlertTriangle, Edit3, Wallet } from 'lucide-react';
+import { Search, X, UserPlus, Users, LogOut, ArrowLeft, Activity, TrendingUp, TrendingDown, Clock, MoreVertical, Trash2, Plus, Vote, CheckCircle, AlertTriangle, Edit3, Wallet, History, XCircle } from 'lucide-react';
 import { apiCall } from '../api';
 import { useSocket } from '../context/SocketContext';
 import { QRCodeSVG } from 'qrcode.react';
+
+const HISTORY_LABELS = {
+  created: 'created this entry',
+  updated: 'edited',
+  deleted: 'deleted this entry',
+  marked_wrong: 'marked it as wrong',
+  marked_correct: 'marked it as correct',
+  settlement_recorded: 'recorded this payment',
+  settlement_confirmed: 'confirmed receiving the payment',
+  settlement_rejected: 'said the payment was not received'
+};
+
+const describeHistoryEntry = (h) => {
+  const who = h.actor_name || 'Someone';
+  if (h.action !== 'updated' || !h.changes) return `${who} ${HISTORY_LABELS[h.action] || h.action}`;
+  const parts = [];
+  if (h.changes.description) parts.push(`renamed "${h.changes.description.from}" → "${h.changes.description.to}"`);
+  if (h.changes.amount) parts.push(`amount ₹${h.changes.amount.from} → ₹${h.changes.amount.to}`);
+  if (h.changes.splits && !h.changes.amount) parts.push('changed the split');
+  return `${who} ${parts.join(', ') || 'edited'}`;
+};
 
 const GroupView = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const [group, setGroup] = useState(null);
   const [members, setMembers] = useState([]);
-  const [balances, setBalances] = useState({});
   const [expenses, setExpenses] = useState([]);
   const [userGroupSummary, setUserGroupSummary] = useState({ youAreOwed: 0, youOwe: 0 });
   const [showAddMember, setShowAddMember] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
   const [activeOweList, setActiveOweList] = useState(null);
   const [expandedExpenseId, setExpandedExpenseId] = useState(null);
-  const [activityMenuOpen, setActivityMenuOpen] = useState(false);
   const [activeEntryMenuId, setActiveEntryMenuId] = useState(null);
   const optionsRef = useRef(null);
   const oweListRef = useRef(null);
@@ -36,6 +55,9 @@ const GroupView = () => {
   const [settleAmount, setSettleAmount] = useState('');
   const [settleWithUser, setSettleWithUser] = useState(null);
   const [settleSuccess, setSettleSuccess] = useState(false);
+  const [settleResult, setSettleResult] = useState(null); // { status, message } from the last settle
+  const [historyById, setHistoryById] = useState({});     // expenseId -> history entries (loaded on expand)
+  const [settlementActionId, setSettlementActionId] = useState(null);
   const [manualUpi, setManualUpi] = useState('');
   const [manualUpiError, setManualUpiError] = useState('');
 
@@ -58,7 +80,6 @@ const GroupView = () => {
         setGroup(parsed.group);
         setMembers(parsed.members || []);
         setExpenses(parsed.expenses || []);
-        setBalances(parsed.balances || {});
         setSettlementsDetails(parsed.settlementsDetails || []);
         setSimplifiedDebts(parsed.simplifiedDebts || []);
         setActivePoll(parsed.activePoll || null);
@@ -71,7 +92,6 @@ const GroupView = () => {
       setGroup(null);
       setMembers([]);
       setExpenses([]);
-      setBalances({});
       setSettlementsDetails([]);
       setSimplifiedDebts([]);
       setActivePoll(null);
@@ -89,7 +109,6 @@ const GroupView = () => {
         setActiveOweList(null);
       }
       if (activityActionsRef.current && !activityActionsRef.current.contains(event.target)) {
-        setActivityMenuOpen(false);
         setActiveEntryMenuId(null);
       }
     };
@@ -139,7 +158,6 @@ const GroupView = () => {
       setGroup(grpData.group);
       setMembers(memData.members);
       setExpenses(expData.expenses);
-      setBalances(balData.balances);
       setSettlementsDetails(balData.details || []);
       setSimplifiedDebts(balData.simplifiedDebts || []);
       setActivePoll(pollData.poll);
@@ -297,19 +315,12 @@ const GroupView = () => {
   };
 
 
-  const getUniquePayers = () => {
-    const payerMap = {};
-    expenses.forEach(exp => {
-      if (!payerMap[exp.paid_by]) payerMap[exp.paid_by] = exp.paid_by_name;
-    });
-    return Object.entries(payerMap);
-  };
-
   const handleSettle = async (e) => {
     e.preventDefault();
     if (!settleAmount || settleAmount <= 0) return;
     try {
-      await apiCall(`/expenses/${id}/settle`, 'POST', { toUserId: settleWithUser.id, amount: settleAmount });
+      const res = await apiCall(`/expenses/${id}/settle`, 'POST', { toUserId: settleWithUser.id, amount: settleAmount });
+      setSettleResult({ status: res.status, message: res.message });
       
       // Fetch new data to update balances for "amount left" display
       await fetchGroupData();
@@ -321,18 +332,38 @@ const GroupView = () => {
     }
   };
 
+  const handleSettlementAction = async (expenseId, action) => {
+    if (action === 'reject' && !window.confirm('Reject this payment? Use this only if you did NOT receive the money.')) return;
+    setSettlementActionId(expenseId);
+    try {
+      await apiCall(`/expenses/${expenseId}/settlement`, 'POST', { action });
+      setHistoryById(prev => ({ ...prev, [expenseId]: undefined }));
+      await fetchGroupData();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSettlementActionId(null);
+    }
+  };
+
+  const loadHistory = async (expenseId) => {
+    if (historyById[expenseId]) return;
+    try {
+      const data = await apiCall(`/expenses/${expenseId}/history`);
+      setHistoryById(prev => ({ ...prev, [expenseId]: data.history }));
+    } catch {
+      setHistoryById(prev => ({ ...prev, [expenseId]: [] }));
+    }
+  };
+
   const closeSettleModal = () => {
     setShowSettleModal(false);
     setSettleWithUser(null);
     setSettleAmount('');
     setSettleSuccess(false);
+    setSettleResult(null);
     setManualUpi('');
     setManualUpiError('');
-  };
-
-  const getUserName = (userId) => {
-    const u = members.find(m => m.id == userId);
-    return u ? u.username : 'Unknown';
   };
 
   const getNetBalanceWithUser = (targetUserId) => {
@@ -739,8 +770,14 @@ const GroupView = () => {
           </div>
 
           {(() => {
-            const renderExpenseRow = (exp, index, total) => {
-              const isSettlement = exp.description.toLowerCase().includes('settlement');
+            const renderExpenseRow = (exp) => {
+              const isSettlement = exp.type === 'settlement' || /^settlement payment/i.test(exp.description);
+              const settlementStatus = isSettlement ? (exp.settlement_status || 'confirmed') : null;
+              const receiverId = exp.to_user_id || exp.splits?.[0]?.userId;
+              const receiverName = exp.splits?.[0]?.username || 'the receiver';
+              const isPending = settlementStatus === 'pending';
+              const isRejected = settlementStatus === 'rejected';
+              const canConfirm = isPending && receiverId == currentUser.id;
               const dt = new Date(exp.created_at);
               const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
               const dateStr = `${dt.getDate()} ${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`;
@@ -758,8 +795,8 @@ const GroupView = () => {
               else { const ns = debtors.map(d => d.username); const last = ns.pop(); paidForLabel = `for ${ns.join(', ')} & ${last}`; }
 
               const isExpanded = expandedExpenseId === exp.id;
-              const accentColor = isSettlement ? 'var(--success)' : 'var(--accent-primary)';
-              const accentBg = isSettlement ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)';
+              const accentColor = isRejected ? 'var(--danger)' : isPending ? '#f59e0b' : isSettlement ? 'var(--success)' : 'var(--accent-primary)';
+              const accentBg = isRejected ? 'rgba(239,68,68,0.1)' : isPending ? 'rgba(245,158,11,0.12)' : isSettlement ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)';
 
               return (
                 <div key={exp.id} style={{
@@ -774,7 +811,10 @@ const GroupView = () => {
 
                   {/* ── Compact Row (always visible, clickable) ── */}
                   <div
-                    onClick={() => setExpandedExpenseId(isExpanded ? null : exp.id)}
+                    onClick={() => {
+                      setExpandedExpenseId(isExpanded ? null : exp.id);
+                      if (!isExpanded) loadHistory(exp.id);
+                    }}
                     style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', padding: '0.75rem 0.9rem', cursor: 'pointer' }}
                   >
                     {/* Icon */}
@@ -783,7 +823,7 @@ const GroupView = () => {
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       background: accentBg, color: accentColor, fontSize: '0.9rem', fontWeight: '800'
                     }}>
-                      {isSettlement ? '✓' : '₹'}
+                      {isPending ? '…' : isRejected ? '✕' : isSettlement ? '✓' : '₹'}
                     </div>
 
                     {/* Main info */}
@@ -804,11 +844,19 @@ const GroupView = () => {
                             <AlertTriangle size={10} /> WRONG ENTRY
                           </span>
                         )}
+                        {(isPending || isRejected) && (
+                          <span style={{
+                            marginLeft: '0.6rem', color: accentColor, fontWeight: 'bold', fontSize: '0.65rem',
+                            padding: '0.1rem 0.4rem', background: accentBg, borderRadius: '4px'
+                          }}>
+                            {isPending ? (canConfirm ? 'NEEDS YOUR CONFIRMATION' : `WAITING FOR ${receiverName.toUpperCase()}`) : 'REJECTED'}
+                          </span>
+                        )}
                       </div>
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
-                      <span style={{ fontWeight: '800', fontSize: '0.88rem', color: accentColor }}>
+                      <span style={{ fontWeight: '800', fontSize: '0.88rem', color: accentColor, textDecoration: isRejected ? 'line-through' : 'none' }}>
                         ₹{parseFloat(exp.amount).toFixed(0)}
                       </span>
                       <span style={{ fontSize: '0.65rem', opacity: 0.4, transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▼</span>
@@ -821,7 +869,6 @@ const GroupView = () => {
                           onClick={(e) => {
                             e.stopPropagation();
                             setActiveEntryMenuId(activeEntryMenuId === exp.id ? null : exp.id);
-                            setActivityMenuOpen(false);
                           }}
                           style={{ padding: '0.3rem', border: 'none', background: 'transparent' }}
                         >
@@ -873,6 +920,30 @@ const GroupView = () => {
                     )}
                   </div>
 
+                  {canConfirm && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0 0.9rem 0.75rem', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', flex: '1 1 160px' }}>
+                        {exp.paid_by_name} says they paid you ₹{parseFloat(exp.amount).toFixed(2)}. Did you receive it?
+                      </span>
+                      <button
+                        className="btn-primary"
+                        disabled={settlementActionId === exp.id}
+                        onClick={(e) => { e.stopPropagation(); handleSettlementAction(exp.id, 'confirm'); }}
+                        style={{ padding: '0.35rem 0.8rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                      >
+                        <CheckCircle size={14} /> Confirm
+                      </button>
+                      <button
+                        className="btn-ghost"
+                        disabled={settlementActionId === exp.id}
+                        onClick={(e) => { e.stopPropagation(); handleSettlementAction(exp.id, 'reject'); }}
+                        style={{ padding: '0.35rem 0.8rem', fontSize: '0.78rem', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                      >
+                        <XCircle size={14} /> Not received
+                      </button>
+                    </div>
+                  )}
+
                   {/* ── Expanded Detail Panel ── */}
                   {isExpanded && (
                     <div style={{ padding: '0 0.9rem 1rem', borderTop: `1px solid ${isSettlement ? 'rgba(16,185,129,0.15)' : 'rgba(99,102,241,0.15)'}` }}>
@@ -902,6 +973,22 @@ const GroupView = () => {
                                   <span style={{ fontSize: '0.82rem', fontWeight: '600' }}>{s.username}</span>
                                 </div>
                                 <span style={{ fontWeight: '700', fontSize: '0.82rem', color: accentColor }}>owes ₹{s.amount.toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {historyById[exp.id]?.length > 0 && (
+                        <div style={{ marginTop: '0.85rem' }}>
+                          <div style={{ fontSize: '0.65rem', opacity: 0.5, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                            <History size={11} /> History
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                            {historyById[exp.id].map(h => (
+                              <div key={h.id} style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', gap: '0.5rem' }}>
+                                <span>{describeHistoryEntry(h)}</span>
+                                <span style={{ opacity: 0.6, whiteSpace: 'nowrap' }}>{h.created_at ? new Date(h.created_at).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : ''}</span>
                               </div>
                             ))}
                           </div>
@@ -959,13 +1046,13 @@ const GroupView = () => {
                     myExpenses.length === 0 ? (
                       <p style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 0', fontSize: '0.85rem', fontStyle: 'italic' }}>No expenses added by you in this month.</p>
                     ) : (
-                      myExpenses.map((exp, i) => renderExpenseRow(exp, i, myExpenses.length))
+                      myExpenses.map(exp => renderExpenseRow(exp))
                     )
                   ) : (
                     othersExpenses.length === 0 ? (
                       <p style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem 0', fontSize: '0.85rem', fontStyle: 'italic' }}>No activity from other members in this month.</p>
                     ) : (
-                      othersExpenses.map((exp, i) => renderExpenseRow(exp, i, othersExpenses.length))
+                      othersExpenses.map(exp => renderExpenseRow(exp))
                     )
                   )}
                 </div>
@@ -1134,9 +1221,13 @@ const GroupView = () => {
                 }}>
                   <CheckCircle size={32} />
                 </div>
-                <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--success)' }}>Payment Recorded</h3>
+                <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--success)' }}>
+                  {settleResult?.status === 'pending' ? 'Waiting for Confirmation' : 'Payment Recorded'}
+                </h3>
                 <p style={{ margin: '0 0 2rem 0', fontSize: '0.9rem', opacity: 0.7 }}>
-                  Now you have ₹{Math.abs(getNetBalanceWithUser(settleWithUser.id)).toFixed(2)} {getNetBalanceWithUser(settleWithUser.id) > 0 ? 'left to pay' : 'left to receive'} from {settleWithUser.username}.
+                  {settleResult?.status === 'pending'
+                    ? `${settleWithUser.username} will be asked to confirm they received it. Your balance updates once they do.`
+                    : `Now you have ₹${Math.abs(getNetBalanceWithUser(settleWithUser.id)).toFixed(2)} ${getNetBalanceWithUser(settleWithUser.id) > 0 ? 'left to pay' : 'left to receive'} from ${settleWithUser.username}.`}
                 </p>
                 <button className="btn-primary" style={{ width: '100%' }} onClick={closeSettleModal}>
                   Great, Thanks!
@@ -1242,7 +1333,7 @@ const GroupView = () => {
 
                         const numericAmount = parseFloat(settleAmount);
                         const payAmount = isNaN(numericAmount) || numericAmount <= 0 ? Math.abs(bal).toFixed(2) : numericAmount.toFixed(2);
-                        const upiLink = `upi://pay?pa=${activeUpi}&pn=${encodeURIComponent(settleWithUser.username)}&am=${payAmount}&cu=INR&tn=FairShare%20Settlement`;
+                        const upiLink = `upi://pay?pa=${encodeURIComponent(activeUpi)}&pn=${encodeURIComponent(settleWithUser.username)}&am=${payAmount}&cu=INR&tn=FairShare%20Settlement`;
 
                         return (
                           <div className="glass-card" style={{ 

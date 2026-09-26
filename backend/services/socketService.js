@@ -1,13 +1,16 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
+const { JWT_SECRET } = require('../config/env');
+const { corsOrigin } = require('../config/cors');
 
 let io;
 
 const init = (server) => {
     io = new Server(server, {
         cors: {
-            origin: "*", // Adjust this in production
-            methods: ["GET", "POST"]
+            origin: corsOrigin,
+            methods: ["GET", "POST"],
+            credentials: true
         }
     });
 
@@ -18,7 +21,7 @@ const init = (server) => {
         }
 
         try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+            const decoded = jwt.verify(token, JWT_SECRET);
             socket.user = decoded;
             next();
         } catch (err) {

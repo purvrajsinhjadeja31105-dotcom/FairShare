@@ -77,7 +77,7 @@ const Dashboard = () => {
         if (cached) {
             try {
                 current = JSON.parse(cached);
-            } catch (e) {}
+            } catch { /* ignore corrupt cache */ }
         }
         localStorage.setItem('fairshare_cache_dashboard', JSON.stringify({
             ...current,

@@ -7,8 +7,30 @@ const socketService = require('../services/socketService');
 const { validateBody } = require('../middleware/validate');
 const { createExpenseSchema, updateExpenseSchema, markWrongSchema, settleSchema } = require('../validation/expenseValidation');
 const { checkGroupMembership, checkExpenseGroupMembership } = require('../middleware/membershipMiddleware');
+const { checkExpenseSplits, checkExpenseParticipants, checkSettlement } = require('../services/expenseRules');
+const { toPaise, fromPaise } = require('../utils/money');
+const { simplifyDebts } = require('../services/debtSimplifier');
+const { fetchUsernames, fetchGroupNames } = require('../utils/lookups');
+const { SETTLEMENT_STATUS, isSettlement, countsTowardBalance, settlementReceiver } = require('../services/ledger');
+const { AUDIT_ACTIONS, addAuditEntry, diffFields } = require('../services/auditLog');
+const { settlementActionSchema } = require('../validation/expenseValidation');
+
+/** Queues a notification on a WriteBatch/Transaction so it commits together with the change. */
+const addNotification = (writer, userId, message) => {
+    writer.set(db.collection('notifications').doc(), {
+        user_id: userId,
+        message,
+        is_read: false,
+        created_at: FieldValue.serverTimestamp()
+    });
+};
+
+const formatRupees = (amount) => `₹${Number(amount).toFixed(2)}`;
 
 router.use(authMid);
+
+// Timestamp -> milliseconds, for sorting newest first
+const createdAtMs = (data) => (data.created_at ? data.created_at.toMillis() : 0);
 
 router.get('/summary', async (req, res, next) => {
     try {
@@ -19,53 +41,29 @@ router.get('/summary', async (req, res, next) => {
             .where('splits_userIds', 'array-contains', userId)
             .where('is_wrong', '==', false)
             .get();
+        const expenses = snapshot.docs.map(doc => doc.data()).filter(countsTowardBalance);
 
-        const summaryItems = {};
+        // Resolve every name in two batched reads instead of one read per row
+        const [groupNames, usernames] = await Promise.all([
+            fetchGroupNames(expenses.map(e => e.group_id)),
+            fetchUsernames(expenses.flatMap(e => [e.paid_by, ...(e.splits || []).map(s => s.userId)]))
+        ]);
 
-        // To map IDs to names
-        const groupCache = {};
-        const userCache = {};
-
-        const getGroupName = async (groupId) => {
-            if (groupCache[groupId]) return groupCache[groupId];
-            const gDoc = await db.collection('groups').doc(groupId).get();
-            const name = gDoc.exists ? gDoc.data().name : 'Unknown Group';
-            groupCache[groupId] = name;
-            return name;
+        // Keyed by user ID (not username, which isn't unique); balances accumulate in paise
+        const people = {};
+        const addEntry = (otherUserId, groupId, amount) => {
+            if (!people[otherUserId]) people[otherUserId] = { balance: 0, details: [] };
+            people[otherUserId].balance += toPaise(amount);
+            people[otherUserId].details.push({ group: groupNames[groupId], groupId, amount });
         };
 
-        const getUsername = async (uId) => {
-            if (userCache[uId]) return userCache[uId];
-            const uDoc = await db.collection('users').doc(uId).get();
-            const name = uDoc.exists ? uDoc.data().username : 'Unknown User';
-            userCache[uId] = name;
-            return name;
-        };
-
-        for (const doc of snapshot.docs) {
-            const data = doc.data();
-            const groupId = data.group_id;
-            const groupName = await getGroupName(groupId);
-            
-            if (data.paid_by === userId) {
-                // You paid, others owe you
-                for (const split of data.splits) {
-                    if (split.userId !== userId && split.amount_owed > 0) {
-                        const username = await getUsername(split.userId);
-                        if (!summaryItems[username]) summaryItems[username] = { userId: split.userId, balance: 0, details: [] };
-                        summaryItems[username].balance += split.amount_owed;
-                        summaryItems[username].details.push({ group: groupName, groupId: groupId, amount: split.amount_owed });
-                    }
-                }
-            } else {
-                // Someone else paid, check if you owe them
-                for (const split of data.splits) {
-                    if (split.userId === userId && split.amount_owed > 0) {
-                        const username = await getUsername(data.paid_by);
-                        if (!summaryItems[username]) summaryItems[username] = { userId: data.paid_by, balance: 0, details: [] };
-                        summaryItems[username].balance -= split.amount_owed;
-                        summaryItems[username].details.push({ group: groupName, groupId: groupId, amount: -split.amount_owed });
-                    }
+        for (const data of expenses) {
+            for (const split of data.splits || []) {
+                if (!(split.amount_owed > 0)) continue;
+                if (data.paid_by === userId && split.userId !== userId) {
+                    addEntry(split.userId, data.group_id, split.amount_owed);   // you paid, they owe you
+                } else if (data.paid_by !== userId && split.userId === userId) {
+                    addEntry(data.paid_by, data.group_id, -split.amount_owed);  // they paid, you owe them
                 }
             }
         }
@@ -73,17 +71,18 @@ router.get('/summary', async (req, res, next) => {
         const youAreOwed = [];
         const youOwe = [];
 
-        Object.entries(summaryItems).forEach(([username, data]) => {
-            if (data.balance > 0.01) {
+        Object.entries(people).forEach(([otherUserId, data]) => {
+            const base = { userId: otherUserId, username: usernames[otherUserId] };
+            if (data.balance > 0) {
                 youAreOwed.push({
-                    username,
-                    amount: data.balance,
+                    ...base,
+                    amount: fromPaise(data.balance),
                     details: data.details.filter(d => d.amount > 0)
                 });
-            } else if (data.balance < -0.01) {
+            } else if (data.balance < 0) {
                 youOwe.push({
-                    username,
-                    amount: Math.abs(data.balance),
+                    ...base,
+                    amount: fromPaise(-data.balance),
                     details: data.details.filter(d => d.amount < 0).map(d => ({ ...d, amount: Math.abs(d.amount) }))
                 });
             }
@@ -91,8 +90,7 @@ router.get('/summary', async (req, res, next) => {
 
         res.json({ youAreOwed, youOwe });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
+        next(err);
     }
 });
 
@@ -104,38 +102,29 @@ router.get('/recent', async (req, res, next) => {
             .where('is_wrong', '==', false)
             .get();
 
-        let recentExpenses = [];
-        for (const doc of snapshot.docs) {
+        // Pick the 5 newest first, then look up names only for those
+        const latest = snapshot.docs
+            .filter(doc => countsTowardBalance(doc.data()))
+            .sort((a, b) => createdAtMs(b.data()) - createdAtMs(a.data()))
+            .slice(0, 5);
+
+        const [usernames, groupNames] = await Promise.all([
+            fetchUsernames(latest.map(doc => doc.data().paid_by)),
+            fetchGroupNames(latest.map(doc => doc.data().group_id))
+        ]);
+
+        const recentExpenses = latest.map(doc => {
             const data = doc.data();
-            
-            let paid_by_name = 'Unknown';
-            const uDoc = await db.collection('users').doc(data.paid_by).get();
-            if (uDoc.exists) paid_by_name = uDoc.data().username;
-
-            let group_name = 'Unknown';
-            const gDoc = await db.collection('groups').doc(data.group_id).get();
-            if (gDoc.exists) group_name = gDoc.data().name;
-
-            recentExpenses.push({
+            return {
                 id: doc.id,
                 description: data.description,
                 amount: data.amount,
                 created_at: data.created_at ? data.created_at.toDate() : null,
-                paid_by_name,
-                group_name,
+                paid_by_name: usernames[data.paid_by],
+                group_name: groupNames[data.group_id],
                 group_id: data.group_id
-            });
-        }
-
-        // Sort in-memory descending by created_at
-        recentExpenses.sort((a, b) => {
-            const timeA = a.created_at ? a.created_at.getTime() : 0;
-            const timeB = b.created_at ? b.created_at.getTime() : 0;
-            return timeB - timeA;
+            };
         });
-
-        // Limit to top 5
-        recentExpenses = recentExpenses.slice(0, 5);
 
         res.json({ recentExpenses });
     } catch (err) {
@@ -155,41 +144,39 @@ router.post('/:groupId', checkGroupMembership, validateBody(createExpenseSchema)
             return res.status(403).json({ error: 'Cannot add expense: This group has no admin. Please elect one first.' });
         }
 
-        const splits_userIds = [payerId, ...splits.filter(s => parseFloat(s.amount_owed) > 0).map(s => s.userId)];
-        // make unique
-        const uniqueSplitUserIds = Array.from(new Set(splits_userIds));
+        const participantError = checkExpenseParticipants({ members: group.members || [], payerId, splits });
+        if (participantError) {
+            return res.status(400).json({ error: participantError });
+        }
 
-        const parsedSplits = splits.map(s => ({
-            userId: s.userId,
-            amount_owed: parseFloat(s.amount_owed)
-        })).filter(s => s.amount_owed > 0);
+        const parsedSplits = splits.filter(s => s.amount_owed > 0);
+        const uniqueSplitUserIds = Array.from(new Set([payerId, ...parsedSplits.map(s => s.userId)]));
 
-        const newExpenseRef = await db.collection('expenses').add({
+        // Expense, notifications and audit entry are committed together (all or nothing)
+        const batch = db.batch();
+        const newExpenseRef = db.collection('expenses').doc();
+        batch.set(newExpenseRef, {
+            type: 'expense',
             group_id: groupId,
             paid_by: payerId,
-            amount: parseFloat(amount),
+            amount,
             description: description,
             is_wrong: false,
             splits: parsedSplits,
             splits_userIds: uniqueSplitUserIds,
             hidden_by: [],
+            created_by: req.user.userId,
             created_at: FieldValue.serverTimestamp()
         });
-
-        // Notifications
-        const batch = db.batch();
-        for (let split of parsedSplits) {
+        for (const split of parsedSplits) {
             if (split.userId !== req.user.userId) {
-                const msg = `"${req.user.username}" added an expense "${description}". You owe $${split.amount_owed.toFixed(2)}.`;
-                const notifRef = db.collection('notifications').doc();
-                batch.set(notifRef, {
-                    user_id: split.userId,
-                    message: msg,
-                    is_read: false,
-                    created_at: FieldValue.serverTimestamp()
-                });
+                addNotification(batch, split.userId, `"${req.user.username}" added an expense "${description}". You owe ${formatRupees(split.amount_owed)}.`);
             }
         }
+        addAuditEntry(batch, {
+            groupId, expenseId: newExpenseRef.id, action: AUDIT_ACTIONS.CREATED, actorId: req.user.userId,
+            changes: { amount: { from: null, to: amount }, description: { from: null, to: description } }
+        });
         await batch.commit();
 
         const memberIds = group.members || [];
@@ -237,7 +224,8 @@ router.get('/:groupId/all', checkGroupMembership, async (req, res, next) => {
         for (const doc of snapshot.docs) {
             const data = doc.data();
             
-            // Skip hidden
+            // Skip deleted entries and ones this user hid
+            if (data.deleted_at) continue;
             if (data.hidden_by && data.hidden_by.includes(req.user.userId)) continue;
 
             const paid_by_name = getUsername(data.paid_by);
@@ -252,9 +240,12 @@ router.get('/:groupId/all', checkGroupMembership, async (req, res, next) => {
                 });
             }
 
+            const settlement = isSettlement(data);
             expenses.push({
                 id: doc.id,
                 ...data,
+                type: settlement ? 'settlement' : 'expense',
+                settlement_status: settlement ? (data.settlement_status || SETTLEMENT_STATUS.CONFIRMED) : null,
                 paid_by_name,
                 splits: enrichedSplits,
                 created_at: data.created_at ? data.created_at.toDate() : null
@@ -274,7 +265,7 @@ router.get('/:groupId/all', checkGroupMembership, async (req, res, next) => {
     }
 });
 
-const deleteUserEntriesInGroup = async (req, res) => {
+const deleteUserEntriesInGroup = async (req, res, next) => {
     try {
         const { groupId, userId } = req.params;
 
@@ -291,21 +282,24 @@ const deleteUserEntriesInGroup = async (req, res) => {
             .where('paid_by', '==', userId)
             .get();
 
+        const active = snapshot.docs.filter(doc => !doc.data().deleted_at);
         const batch = db.batch();
-        snapshot.forEach(doc => batch.delete(doc.ref));
+        active.forEach(doc => {
+            batch.update(doc.ref, { deleted_at: FieldValue.serverTimestamp(), deleted_by: req.user.userId });
+            addAuditEntry(batch, { groupId, expenseId: doc.id, action: AUDIT_ACTIONS.DELETED, actorId: req.user.userId });
+        });
         await batch.commit();
 
-        res.json({ message: `Deleted ${snapshot.size} expense entries` });
+        res.json({ message: `Deleted ${active.length} expense entries` });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
+        next(err);
     }
 };
 
 router.delete('/:groupId/user/:userId/all', checkGroupMembership, deleteUserEntriesInGroup);
 router.delete('/:groupId/user/:userId', checkGroupMembership, deleteUserEntriesInGroup);
 
-router.delete('/:expenseId', checkExpenseGroupMembership, async (req, res) => {
+router.delete('/:expenseId', checkExpenseGroupMembership, async (req, res, next) => {
     try {
         const expenseId = req.params.expenseId;
         const expDoc = req.expenseDoc;
@@ -318,19 +312,14 @@ router.delete('/:expenseId', checkExpenseGroupMembership, async (req, res) => {
         const groupDoc = req.groupDoc;
         const members = groupDoc.exists ? groupDoc.data().members || [] : [];
 
-        await expDoc.ref.delete();
-
-        const msg = `Notice: The expense "${expense.description}" has been deleted. Associated debts have been reversed.`;
+        // Soft delete: the entry stays in the database (for the audit trail) but no longer counts anywhere
         const batch = db.batch();
-        for (let mId of members) {
-            const notifRef = db.collection('notifications').doc();
-            batch.set(notifRef, {
-                user_id: mId,
-                message: msg,
-                is_read: false,
-                created_at: FieldValue.serverTimestamp()
-            });
-        }
+        batch.update(expDoc.ref, { deleted_at: FieldValue.serverTimestamp(), deleted_by: req.user.userId });
+        const msg = isSettlement(expense)
+            ? `Notice: The settlement "${expense.description}" was cancelled.`
+            : `Notice: The expense "${expense.description}" has been deleted. Associated debts have been reversed.`;
+        for (const mId of members) addNotification(batch, mId, msg);
+        addAuditEntry(batch, { groupId, expenseId, action: AUDIT_ACTIONS.DELETED, actorId: req.user.userId });
         await batch.commit();
 
         for (let mId of members) {
@@ -342,8 +331,7 @@ router.delete('/:expenseId', checkExpenseGroupMembership, async (req, res) => {
 
         res.json({ message: 'Expense deleted' });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
+        next(err);
     }
 });
 
@@ -366,22 +354,32 @@ router.put('/:expenseId', checkExpenseGroupMembership, validateBody(updateExpens
             return res.status(403).json({ error: 'Cannot edit: This entry is marked as WRONG by the admin. Please delete it or wait for admin review.' });
         }
 
-        const parsedSplits = (splits || []).map(s => ({
-            userId: s.userId,
-            amount_owed: parseFloat(s.amount_owed)
-        })).filter(s => s.amount_owed > 0);
-
-        const splits_userIds = [expense.paid_by, ...parsedSplits.map(s => s.userId)];
-        const uniqueSplitUserIds = Array.from(new Set(splits_userIds));
-
-        await expDoc.ref.update({
-            amount: parseFloat(amount),
-            description: description,
-            splits: parsedSplits,
-            splits_userIds: uniqueSplitUserIds
-        });
-
         const members = groupDoc.exists ? groupDoc.data().members || [] : [];
+
+        // Only fields that were sent are changed. If the money changes, the result must still add up
+        // (checked only then, so older entries with rounding gaps can still be renamed).
+        const moneyChanged = amount !== undefined || splits !== undefined;
+        const splitError = (moneyChanged && checkExpenseSplits({ amount: amount ?? expense.amount, splits: splits ?? expense.splits ?? [] }))
+            || (splits && checkExpenseParticipants({ members, payerId: expense.paid_by, splits }));
+        if (splitError) {
+            return res.status(400).json({ error: splitError });
+        }
+
+        const updates = {};
+        if (amount !== undefined) updates.amount = amount;
+        if (description !== undefined) updates.description = description;
+        if (splits !== undefined) {
+            updates.splits = splits.filter(s => s.amount_owed > 0);
+            updates.splits_userIds = Array.from(new Set([expense.paid_by, ...updates.splits.map(s => s.userId)]));
+        }
+
+        const changes = diffFields(expense, updates, ['amount', 'description', 'splits']);
+        const batch = db.batch();
+        batch.update(expDoc.ref, updates);
+        if (Object.keys(changes).length > 0) {
+            addAuditEntry(batch, { groupId: expense.group_id, expenseId, action: AUDIT_ACTIONS.UPDATED, actorId: userId, changes });
+        }
+        await batch.commit();
 
         socketService.emitToGroup(expense.group_id, members, 'update_expenses', { groupId: expense.group_id, action: 'updated' });
         socketService.emitToGroup(expense.group_id, members, 'update_summary', { groupId: expense.group_id });
@@ -406,24 +404,20 @@ router.post('/:expenseId/mark-wrong', checkExpenseGroupMembership, validateBody(
             return res.status(403).json({ error: 'Only the group admin can mark entries as wrong.' });
         }
 
-        await expDoc.ref.update({ is_wrong: !!isWrong });
-
         const members = groupDoc.data().members || [];
         const statusMsg = isWrong ? 'WRONG' : 'CORRECT';
         const msg = `Notice: Admin marked the expense "${expense.description}" as ${statusMsg}. Associated debts have been ${isWrong ? 'resolved' : 're-instated'}.`;
         const creatorMsg = isWrong ? `Admin flagged your entry "${expense.description}" as WRONG.` : `Admin marked your entry "${expense.description}" as CORRECT.`;
 
         const batch = db.batch();
-        for (let mId of members) {
-            const finalMsg = (mId === expense.paid_by) ? creatorMsg : msg;
-            const notifRef = db.collection('notifications').doc();
-            batch.set(notifRef, {
-                user_id: mId,
-                message: finalMsg,
-                is_read: false,
-                created_at: FieldValue.serverTimestamp()
-            });
+        batch.update(expDoc.ref, { is_wrong: !!isWrong });
+        for (const mId of members) {
+            addNotification(batch, mId, mId === expense.paid_by ? creatorMsg : msg);
         }
+        addAuditEntry(batch, {
+            groupId: expense.group_id, expenseId,
+            action: isWrong ? AUDIT_ACTIONS.MARKED_WRONG : AUDIT_ACTIONS.MARKED_CORRECT, actorId: userId
+        });
         await batch.commit();
 
         for (let mId of members) {
@@ -480,21 +474,20 @@ router.get('/:groupId/settlements', checkGroupMembership, async (req, res, next)
             .where('is_wrong', '==', false)
             .get();
 
-        const balances = {};
+        const balancePaise = {};
         const details = [];
 
         for (const doc of snapshot.docs) {
             const data = doc.data();
+            if (!countsTowardBalance(data)) continue; // deleted, or a settlement not yet confirmed
             const paid_by_name = getUsername(data.paid_by);
 
             for (const split of data.splits || []) {
                 const owed_by_name = getUsername(split.userId);
 
-                if (!balances[data.paid_by]) balances[data.paid_by] = 0;
-                if (!balances[split.userId]) balances[split.userId] = 0;
-
-                balances[data.paid_by] += split.amount_owed;
-                balances[split.userId] -= split.amount_owed;
+                const owedPaise = toPaise(split.amount_owed);
+                balancePaise[data.paid_by] = (balancePaise[data.paid_by] || 0) + owedPaise;
+                balancePaise[split.userId] = (balancePaise[split.userId] || 0) - owedPaise;
 
                 details.push({
                     expense_id: doc.id,
@@ -509,7 +502,9 @@ router.get('/:groupId/settlements', checkGroupMembership, async (req, res, next)
             }
         }
 
-        const { simplifyDebts } = require('../services/debtSimplifier');
+        const balances = Object.fromEntries(
+            Object.entries(balancePaise).map(([uId, paise]) => [uId, fromPaise(paise)])
+        );
         const simplifiedDebts = simplifyDebts(balances, userCache);
 
         res.json({ balances, details, simplifiedDebts });
@@ -524,31 +519,135 @@ router.post('/:groupId/settle', checkGroupMembership, validateBody(settleSchema)
         const { toUserId, fromUserId, amount } = req.body;
         const actingUserId = req.user.userId;
         const actualFromId = fromUserId || actingUserId;
+        const members = req.group.members || [];
 
-        const toUserDoc = await db.collection('users').doc(toUserId).get();
-        const toUsername = toUserDoc.exists ? toUserDoc.data().username : 'User';
-        const description = `Settlement Payment to ${toUsername}`;
+        const settlementError = checkSettlement({ members, actingUserId, fromUserId: actualFromId, toUserId });
+        if (settlementError) {
+            return res.status(400).json({ error: settlementError });
+        }
 
-        const newExpenseRef = await db.collection('expenses').add({
+        const usernames = await fetchUsernames([actualFromId, toUserId]);
+        const description = `Settlement Payment to ${usernames[toUserId]}`;
+
+        // The receiver saying "I got paid" can be trusted immediately; the payer saying "I paid"
+        // stays pending until the receiver confirms, so nobody can wipe out a debt on their own.
+        const recordedByReceiver = actingUserId === toUserId;
+        const status = recordedByReceiver ? SETTLEMENT_STATUS.CONFIRMED : SETTLEMENT_STATUS.PENDING;
+
+        const batch = db.batch();
+        const settlementRef = db.collection('expenses').doc();
+        batch.set(settlementRef, {
+            type: 'settlement',
+            settlement_status: status,
             group_id: groupId,
             paid_by: actualFromId,
-            amount: parseFloat(amount),
-            description: description,
+            to_user_id: toUserId,
+            amount,
+            description,
             is_wrong: false,
-            splits: [{ userId: toUserId, amount_owed: parseFloat(amount) }],
+            splits: [{ userId: toUserId, amount_owed: amount }],
             splits_userIds: [actualFromId, toUserId],
             hidden_by: [],
-            created_at: FieldValue.serverTimestamp()
+            created_by: actingUserId,
+            created_at: FieldValue.serverTimestamp(),
+            ...(recordedByReceiver && { confirmed_at: FieldValue.serverTimestamp() })
+        });
+        addAuditEntry(batch, {
+            groupId, expenseId: settlementRef.id, action: AUDIT_ACTIONS.SETTLEMENT_RECORDED, actorId: actingUserId,
+            changes: { amount: { from: null, to: amount }, settlement_status: { from: null, to: status } }
         });
 
-        const groupDoc = req.groupDoc;
-        const members = groupDoc.exists ? groupDoc.data().members || [] : [];
+        const otherPartyId = recordedByReceiver ? actualFromId : toUserId;
+        addNotification(batch, otherPartyId, recordedByReceiver
+            ? `${usernames[toUserId]} recorded that you paid them ${formatRupees(amount)} in "${req.group.name}".`
+            : `${usernames[actualFromId]} says they paid you ${formatRupees(amount)} in "${req.group.name}". Open the group to confirm you received it.`);
+        await batch.commit();
 
         socketService.emitToGroup(groupId, members, 'update_expenses', { groupId, action: 'settled' });
         socketService.emitToGroup(groupId, members, 'update_summary', { groupId });
-        socketService.emitToUser(toUserId, 'update_notifications');
+        socketService.emitToUser(otherPartyId, 'update_notifications');
 
-        res.status(201).json({ message: 'Settlement recorded' });
+        res.status(201).json({
+            message: recordedByReceiver
+                ? 'Settlement recorded'
+                : `Payment recorded. ${usernames[toUserId]} needs to confirm they received it before balances update.`,
+            settlementId: settlementRef.id,
+            status
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// Receiver confirms or rejects a pending settlement
+router.post('/:expenseId/settlement', checkExpenseGroupMembership, validateBody(settlementActionSchema), async (req, res, next) => {
+    try {
+        const { expenseId } = req.params;
+        const { action } = req.body;
+        const userId = req.user.userId;
+        const expenseRef = req.expenseDoc.ref;
+        const members = req.group.members || [];
+
+        // Transaction: re-read inside so two clicks (or two devices) can't both change the status
+        const result = await db.runTransaction(async (tx) => {
+            const snap = await tx.get(expenseRef);
+            const entry = snap.data();
+
+            if (!isSettlement(entry)) return { status: 400, error: 'This entry is not a settlement' };
+            if (settlementReceiver(entry) !== userId) return { status: 403, error: 'Only the person who received the payment can confirm or reject it' };
+            const current = entry.settlement_status || SETTLEMENT_STATUS.CONFIRMED;
+            if (current !== SETTLEMENT_STATUS.PENDING) {
+                return { status: 400, error: `This settlement is already ${current}` };
+            }
+
+            const newStatus = action === 'confirm' ? SETTLEMENT_STATUS.CONFIRMED : SETTLEMENT_STATUS.REJECTED;
+            tx.update(expenseRef, {
+                settlement_status: newStatus,
+                [`${newStatus}_at`]: FieldValue.serverTimestamp()
+            });
+            addAuditEntry(tx, {
+                groupId: entry.group_id, expenseId,
+                action: action === 'confirm' ? AUDIT_ACTIONS.SETTLEMENT_CONFIRMED : AUDIT_ACTIONS.SETTLEMENT_REJECTED,
+                actorId: userId,
+                changes: { settlement_status: { from: SETTLEMENT_STATUS.PENDING, to: newStatus } }
+            });
+            addNotification(tx, entry.paid_by, action === 'confirm'
+                ? `${req.user.username} confirmed receiving your payment of ${formatRupees(entry.amount)} in "${req.group.name}".`
+                : `${req.user.username} says they did NOT receive your payment of ${formatRupees(entry.amount)} in "${req.group.name}". The balance is unchanged.`);
+            return { status: 200, newStatus, payerId: entry.paid_by, groupId: entry.group_id };
+        });
+
+        if (result.error) return res.status(result.status).json({ error: result.error });
+
+        socketService.emitToGroup(result.groupId, members, 'update_expenses', { groupId: result.groupId, action: `settlement_${result.newStatus}` });
+        socketService.emitToGroup(result.groupId, members, 'update_summary', { groupId: result.groupId });
+        socketService.emitToUser(result.payerId, 'update_notifications');
+
+        res.json({ message: action === 'confirm' ? 'Payment confirmed' : 'Payment rejected', status: result.newStatus });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// Change history of one entry, oldest first
+router.get('/:expenseId/history', checkExpenseGroupMembership, async (req, res, next) => {
+    try {
+        const snapshot = await db.collection('audit_logs').where('expense_id', '==', req.params.expenseId).get();
+        const entries = snapshot.docs
+            .map(doc => ({ id: doc.id, ...doc.data() }))
+            .sort((a, b) => (a.created_at?.toMillis() || 0) - (b.created_at?.toMillis() || 0));
+        const names = await fetchUsernames(entries.map(e => e.actor_id));
+
+        res.json({
+            history: entries.map(e => ({
+                id: e.id,
+                action: e.action,
+                actor_id: e.actor_id,
+                actor_name: names[e.actor_id],
+                changes: e.changes,
+                created_at: e.created_at ? e.created_at.toDate() : null
+            }))
+        });
     } catch (err) {
         next(err);
     }

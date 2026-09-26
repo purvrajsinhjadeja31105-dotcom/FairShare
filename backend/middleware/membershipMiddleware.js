@@ -54,7 +54,7 @@ const checkExpenseGroupMembership = async (req, res, next) => {
         }
 
         const expenseDoc = await db.collection('expenses').doc(expenseId).get();
-        if (!expenseDoc.exists) {
+        if (!expenseDoc.exists || expenseDoc.data().deleted_at) {
             return res.status(404).json({ error: 'Expense not found' });
         }
 

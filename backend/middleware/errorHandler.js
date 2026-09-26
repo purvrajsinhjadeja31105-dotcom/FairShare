@@ -1,12 +1,5 @@
 const errorHandler = (err, req, res, next) => {
-    console.error('[Global Error Handler] Error details:', {
-        name: err.name,
-        message: err.message,
-        stack: err.stack,
-        code: err.code
-    });
-
-    let statusCode = err.statusCode || 500;
+    let statusCode = err.statusCode || err.status || 500;
     let errorType = err.name || 'InternalServerError';
     let message = err.message || 'An unexpected error occurred on the server.';
 
@@ -23,12 +16,33 @@ const errorHandler = (err, req, res, next) => {
         statusCode = 401;
         errorType = 'UnauthorizedError';
         message = 'Authentication token expired. Please login again.';
+    } else if (err.type === 'entity.parse.failed') {
+        statusCode = 400;
+        errorType = 'BadRequestError';
+        message = 'Request body is not valid JSON.';
+    } else if (err.message === 'Not allowed by CORS') {
+        statusCode = 403;
+        errorType = 'CorsError';
     }
 
+    if (statusCode >= 500) {
+        console.error('[Global Error Handler] Error details:', {
+            name: err.name,
+            message: err.message,
+            stack: err.stack,
+            code: err.code
+        });
+        // Don't leak internal error details (database messages, stack traces) to clients in production
+        if (process.env.NODE_ENV === 'production') {
+            message = 'An unexpected error occurred on the server. Please try again.';
+        }
+    }
+
+    // `error` carries the human-readable message, matching every route's { error } responses
     res.status(statusCode).json({
-        error: errorType,
-        message: message,
-        ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
+        error: message,
+        type: errorType,
+        ...(process.env.NODE_ENV !== 'production' && statusCode >= 500 && { stack: err.stack })
     });
 };
 

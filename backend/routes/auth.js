@@ -2,14 +2,31 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { JWT_SECRET } = require('../config/env');
 const db = require('../config/db');
-const crypto = require('crypto');
+const { hashToken, createToken, expiresIn, isExpired, HOUR } = require('../utils/tokens');
 const emailService = require('../services/emailService');
 const { validateBody } = require('../middleware/validate');
+const { loginLimiter, emailLimiter } = require('../middleware/rateLimiters');
 const { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } = require('../validation/authValidation');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
-router.post('/register', validateBody(registerSchema), async (req, res, next) => {
+const VERIFICATION_TTL = 24 * HOUR;
+const RESET_TTL = HOUR;
+
+/**
+ * Finds the user holding a one-time token. Tokens are stored hashed; the raw-value
+ * fallback keeps links that were emailed before hashing was introduced working.
+ */
+const findUserByToken = async (field, token) => {
+    for (const value of [hashToken(token), token]) {
+        const snapshot = await db.collection('users').where(field, '==', value).limit(1).get();
+        if (!snapshot.empty) return snapshot.docs[0];
+    }
+    return null;
+};
+
+router.post('/register', emailLimiter, validateBody(registerSchema), async (req, res, next) => {
     try {
         const { username, email, password } = req.body;
 
@@ -19,13 +36,14 @@ router.post('/register', validateBody(registerSchema), async (req, res, next) =>
         }
 
         const password_hash = await bcrypt.hash(password, 10);
-        const verification_token = crypto.randomBytes(32).toString('hex');
+        const verification = createToken();
 
         const newUserRef = await db.collection('users').add({
             username,
             email,
             password_hash,
-            verification_token,
+            verification_token: verification.hash,
+            verification_token_expiry: expiresIn(VERIFICATION_TTL),
             is_verified: false,
             created_at: new Date()
         });
@@ -33,7 +51,7 @@ router.post('/register', validateBody(registerSchema), async (req, res, next) =>
         // Send verification email
         let emailSent = true;
         try {
-            await emailService.sendVerificationEmail(email, username, verification_token);
+            await emailService.sendVerificationEmail(email, username, verification.token);
             console.log(`[Auth] Verification email triggered for: ${email}`);
         } catch (emailErr) {
             console.error('[Auth] Failed to trigger verification email:', emailErr);
@@ -52,7 +70,7 @@ router.post('/register', validateBody(registerSchema), async (req, res, next) =>
     }
 });
 
-router.post('/login', validateBody(loginSchema), async (req, res, next) => {
+router.post('/login', loginLimiter, validateBody(loginSchema), async (req, res, next) => {
     try {
         const { email, password } = req.body;
 
@@ -64,17 +82,17 @@ router.post('/login', validateBody(loginSchema), async (req, res, next) => {
         const userDoc = usersSnapshot.docs[0];
         const user = { id: userDoc.id, ...userDoc.data() };
 
-        // Check verification status
-        if (!user.is_verified) {
-            return res.status(403).json({ error: 'Please verify your email address before logging in.' });
-        }
-
         const match = await bcrypt.compare(password, user.password_hash);
         if (!match) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        const token = jwt.sign({ userId: user.id, username: user.username }, process.env.JWT_SECRET || 'secret', { expiresIn: '24h' });
+        // Checked after the password so this message doesn't reveal which emails have accounts
+        if (!user.is_verified) {
+            return res.status(403).json({ error: 'Please verify your email address before logging in.' });
+        }
+
+        const token = jwt.sign({ userId: user.id, username: user.username }, JWT_SECRET, { expiresIn: '24h' });
         res.json({ message: 'Login successful', token, user: { id: user.id, username: user.username, email: user.email, upi_id: user.upi_id || null } });
     } catch (err) {
         next(err);
@@ -85,17 +103,17 @@ router.post('/login', validateBody(loginSchema), async (req, res, next) => {
 router.get('/verify', async (req, res, next) => {
     try {
         const { token } = req.query;
-        if (!token) return res.status(400).json({ error: 'Missing token' });
+        if (!token || typeof token !== 'string') return res.status(400).json({ error: 'Missing token' });
 
-        const usersSnapshot = await db.collection('users').where('verification_token', '==', token).limit(1).get();
-        if (usersSnapshot.empty) {
-            return res.status(400).json({ error: 'Invalid or expired verification token' });
+        const userDoc = await findUserByToken('verification_token', token);
+        if (!userDoc || isExpired(userDoc.data().verification_token_expiry)) {
+            return res.status(400).json({ error: 'Invalid or expired verification link. Please request a new one from the login page.' });
         }
 
-        const userDoc = usersSnapshot.docs[0];
         await userDoc.ref.update({
             is_verified: true,
-            verification_token: null
+            verification_token: null,
+            verification_token_expiry: null
         });
 
         const rawFrontend = process.env.FRONTEND_URL;
@@ -118,7 +136,7 @@ router.get('/verify', async (req, res, next) => {
 });
 
 // Resend verification email route
-router.post('/resend-verification', async (req, res, next) => {
+router.post('/resend-verification', emailLimiter, async (req, res, next) => {
     try {
         const { email } = req.body;
         if (!email) return res.status(400).json({ error: 'Email is required' });
@@ -135,13 +153,14 @@ router.post('/resend-verification', async (req, res, next) => {
             return res.status(400).json({ error: 'This account is already verified. Please log in.' });
         }
 
-        let token = user.verification_token;
-        if (!token) {
-            token = crypto.randomBytes(32).toString('hex');
-            await userDoc.ref.update({ verification_token: token });
-        }
+        // Only hashes are stored, so every resend issues a fresh token (which also invalidates the old link)
+        const verification = createToken();
+        await userDoc.ref.update({
+            verification_token: verification.hash,
+            verification_token_expiry: expiresIn(VERIFICATION_TTL)
+        });
 
-        await emailService.sendVerificationEmail(email, user.username, token);
+        await emailService.sendVerificationEmail(email, user.username, verification.token);
         res.json({ message: 'Verification email sent! Please check your inbox (including spam folder).' });
     } catch (err) {
         console.error('[Auth] Resend verification error:', err);
@@ -150,7 +169,7 @@ router.post('/resend-verification', async (req, res, next) => {
 });
 
 
-router.post('/forgot-password', validateBody(forgotPasswordSchema), async (req, res, next) => {
+router.post('/forgot-password', emailLimiter, validateBody(forgotPasswordSchema), async (req, res, next) => {
     try {
         const { email } = req.body;
 
@@ -162,16 +181,15 @@ router.post('/forgot-password', validateBody(forgotPasswordSchema), async (req, 
 
         const userDoc = usersSnapshot.docs[0];
         const user = { id: userDoc.id, ...userDoc.data() };
-        const resetToken = crypto.randomBytes(32).toString('hex');
-        const expiry = new Date(Date.now() + 3600000); // 1 hour
+        const reset = createToken();
 
         await userDoc.ref.update({
-            reset_token: resetToken,
-            reset_token_expiry: expiry.toISOString()
+            reset_token: reset.hash,
+            reset_token_expiry: expiresIn(RESET_TTL)
         });
 
         try {
-            await emailService.sendPasswordResetEmail(user.email, user.username, resetToken);
+            await emailService.sendPasswordResetEmail(user.email, user.username, reset.token);
         } catch (emailErr) {
             console.error('Failed to send reset email:', emailErr);
             return res.status(500).json({ error: 'Failed to send reset email. Please try again later.' });
@@ -187,15 +205,14 @@ router.post('/reset-password', validateBody(resetPasswordSchema), async (req, re
     try {
         const { token, newPassword } = req.body;
 
-        const usersSnapshot = await db.collection('users').where('reset_token', '==', token).limit(1).get();
-        if (usersSnapshot.empty) {
+        const userDoc = await findUserByToken('reset_token', token);
+        if (!userDoc) {
             return res.status(400).json({ error: 'Invalid or expired reset token' });
         }
 
-        const userDoc = usersSnapshot.docs[0];
         const user = userDoc.data();
-        
-        if (new Date() > new Date(user.reset_token_expiry)) {
+
+        if (!user.reset_token_expiry || isExpired(user.reset_token_expiry)) {
             return res.status(400).json({ error: 'Reset token has expired. Please request a new one.' });
         }
 

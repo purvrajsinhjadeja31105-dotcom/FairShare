@@ -1,6 +1,9 @@
 // Use the provided env variable or default to the Render backend URL for production
 const API_URL = import.meta.env.VITE_API_BASE_URL || 'https://fairshare-backend-9bgf.onrender.com/api';
 
+// Request/response tracing only in `npm run dev`; bodies are never logged (they can contain passwords)
+const debugLog = import.meta.env.DEV ? console.log : () => {};
+
 const authHeader = () => {
     const token = localStorage.getItem('fairshare_token');
     return token ? { 'Authorization': `Bearer ${token}` } : {};
@@ -17,11 +20,11 @@ export const apiCall = async (endpoint, method = 'GET', body = null) => {
 
     const fullUrl = `${API_URL}${endpoint}`;
     
-    console.log(`[API Request] ${method} ${fullUrl}`, body ? body : '');
+    debugLog(`[API Request] ${method} ${fullUrl}`);
 
     try {
         const response = await fetch(fullUrl, config);
-        console.log(`[API Response] ${method} ${fullUrl} -> Status ${response.status}`);
+        debugLog(`[API Response] ${method} ${fullUrl} -> Status ${response.status}`);
         
         // Check Content-Type to avoid JSON parsing errors for HTML
         const contentType = response.headers.get("content-type");
@@ -35,7 +38,7 @@ export const apiCall = async (endpoint, method = 'GET', body = null) => {
                 const err = new Error(errMsg);
                 err.status = response.status;
                 err.details = data.details;
-                console.error(`[API Fail] ${method} ${fullUrl}:`, errMsg, data);
+                console.error(`[API Fail] ${method} ${fullUrl}:`, errMsg);
                 throw err;
             }
             return data;

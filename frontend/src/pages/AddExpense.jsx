@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Search, Plus, Check, X, Clock, HelpCircle } from 'lucide-react';
 import { apiCall } from '../api';
+import { splitEvenly } from '../utils/money';
 
 const AddExpense = () => {
     const { id, expenseId } = useParams();
     const isEdit = !!expenseId;
     const navigate = useNavigate();
-    const location = useLocation();
-    const initialDirection = location.state?.initialDirection || 'others_owe';
     const [group, setGroup] = useState(null);
     const [members, setMembers] = useState([]);
     
@@ -18,7 +17,6 @@ const AddExpense = () => {
     const [splitType, setSplitType] = useState('equal'); // 'equal' vs 'custom'
     const [customSplits, setCustomSplits] = useState({}); // { userId: { amount, reason } }
     const [selectedMemberIds, setSelectedMemberIds] = useState([]);
-    const [splitSearchQuery, setSplitSearchQuery] = useState('');
     const [isAutoSplitActive, setIsAutoSplitActive] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -61,7 +59,7 @@ const AddExpense = () => {
             const cached = localStorage.getItem(`fairshare_cache_group_${id}`);
             let current = {};
             if (cached) {
-                try { current = JSON.parse(cached); } catch (e) {}
+                try { current = JSON.parse(cached); } catch { /* ignore corrupt cache */ }
             }
             localStorage.setItem(`fairshare_cache_group_${id}`, JSON.stringify({
                 ...current,
@@ -99,11 +97,11 @@ const AddExpense = () => {
     // Auto-calculate divisions whenever amount or selection changes
     useEffect(() => {
         if (splitType === 'custom' && isAutoSplitActive && amount > 0 && selectedMemberIds.length > 0) {
-            const perPerson = (parseFloat(amount) / selectedMemberIds.length).toFixed(2);
+            const shares = splitEvenly(amount, selectedMemberIds.length);
             const newSplits = {};
-            selectedMemberIds.forEach(id => {
-                newSplits[id] = { 
-                    amount: perPerson, 
+            selectedMemberIds.forEach((id, i) => {
+                newSplits[id] = {
+                    amount: shares[i],
                     reason: customSplits[id]?.reason || '' 
                 };
             });
@@ -136,8 +134,8 @@ const AddExpense = () => {
 
             if (splitType === 'equal') {
                 if (!amount || !description) throw new Error('Please enter description and amount');
-                const splitAmount = (parseFloat(amount) / members.length).toFixed(2);
-                const splits = members.map(m => ({ userId: m.id, amount_owed: splitAmount }));
+                const shares = splitEvenly(amount, members.length);
+                const splits = members.map((m, i) => ({ userId: m.id, amount_owed: shares[i] }));
                 
                 await apiCall(isEdit ? `/expenses/${expenseId}` : `/expenses/${id}`, isEdit ? 'PUT' : 'POST', {
                     amount,
@@ -147,7 +145,7 @@ const AddExpense = () => {
                 });
             } else {
                 const activeEntries = Object.entries(customSplits).filter(([userId, data]) =>
-                    selectedMemberIds.includes(parseInt(userId)) && parseFloat(data.amount || 0) > 0
+                    selectedMemberIds.includes(userId) && parseFloat(data.amount || 0) > 0
                 );
 
                 if (activeEntries.length === 0) throw new Error('Please select at least one person and enter their debt amount');
@@ -161,7 +159,7 @@ const AddExpense = () => {
                      await apiCall(`/expenses/${expenseId}`, 'PUT', {
                         amount: data.amount,
                         description: data.reason || description,
-                        splits: [{ userId: parseInt(uid), amount_owed: data.amount }],
+                        splits: [{ userId: uid, amount_owed: data.amount }],
                         paidBy: finalPayerId
                      });
                 } else {
@@ -170,7 +168,7 @@ const AddExpense = () => {
                         await apiCall(`/expenses/${id}`, 'POST', {
                             amount: data.amount,
                             description: finalDebtDesc,
-                            splits: [{ userId: parseInt(userId), amount_owed: data.amount }],
+                            splits: [{ userId, amount_owed: data.amount }],
                             paidBy: finalPayerId
                         });
                     }
@@ -381,7 +379,7 @@ const AddExpense = () => {
                                 <div style={{ marginTop: '1.5rem', padding: '1rem 1.25rem', borderRadius: '14px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span style={{ opacity: 0.7, fontSize: '0.9rem' }}>{selectedMemberIds.length} person{selectedMemberIds.length > 1 ? 's' : ''} included · Total</span>
                                     <span style={{ fontSize: '1.5rem', fontWeight: '900', color: 'var(--accent-primary)' }}>
-                                        ₹{Object.entries(customSplits).filter(([uid]) => selectedMemberIds.includes(parseInt(uid))).reduce((acc, [_, d]) => acc + parseFloat(d.amount || 0), 0).toFixed(2)}
+                                        ₹{Object.entries(customSplits).filter(([uid]) => selectedMemberIds.includes(uid)).reduce((acc, [, d]) => acc + parseFloat(d.amount || 0), 0).toFixed(2)}
                                     </span>
                                 </div>
                             )}

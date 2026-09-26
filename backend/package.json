@@ -4,7 +4,14 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "node --watch server.js",
+    "dev:local": "firebase emulators:exec --only firestore --ui \"npm run seed && npm run dev\"",
+    "emulator": "firebase emulators:start --only firestore",
+    "seed": "node scripts/seed.js",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:api": "node scripts/test-api.js",
+    "test:all": "npm test && npm run test:api"
   },
   "keywords": [],
   "author": "",
@@ -15,11 +22,37 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.0",
     "firebase-admin": "^14.0.0",
     "google-auth-library": "^10.6.2",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^8.0.5",
     "socket.io": "^4.8.3",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.31.0",
+    "jest": "^29.7.0",
+    "supertest": "^7.3.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "services/debtSimplifier.js",
+      "services/expenseRules.js",
+      "validation/**/*.js",
+      "middleware/validate.js",
+      "middleware/rateLimiters.js",
+      "utils/tokens.js",
+      "utils/money.js"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/tests/api/"
+    ]
   }
 }

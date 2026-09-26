@@ -1,9 +1,16 @@
 const { initializeApp, getApps, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
-// Initialize Firebase Admin SDK
-if (getApps().length === 0) {
+// Local development: firebase-admin talks to the emulator automatically when
+// FIRESTORE_EMULATOR_HOST is set, so no service account (and no production data) is involved.
+if (getApps().length === 0 && process.env.FIRESTORE_EMULATOR_HOST) {
+    initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID || 'demo-fairshare' });
+    console.log(`[DB] Using LOCAL Firestore emulator at ${process.env.FIRESTORE_EMULATOR_HOST}`);
+} else if (getApps().length === 0) {
+    if (process.env.NODE_ENV !== 'production') {
+        console.warn('[DB] WARNING: FIRESTORE_EMULATOR_HOST is not set — this process is using the PRODUCTION database.');
+    }
     try {
         let serviceAccount;
         const rawKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || 

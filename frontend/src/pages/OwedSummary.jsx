@@ -61,11 +61,13 @@ const OwedSummary = () => {
             // Actually, I'll just record it as an expense paid by the person who gave the cash.
             // If I received money from Alice, Alice is paid_by.
             
-            await apiCall(`/expenses/${detail.groupId}/settle`, 'POST', { 
+            const res = await apiCall(`/expenses/${detail.groupId}/settle`, 'POST', { 
                 toUserId: isOwedByOthers ? currentUser.id : item.userId,
                 fromUserId: isOwedByOthers ? item.userId : currentUser.id,
                 amount: val 
             });
+            // Payments you sent stay pending until the receiver confirms, so say so before refreshing
+            if (res.status === 'pending') alert(res.message);
             window.location.reload();
         } catch (err) {
             alert(err.message);

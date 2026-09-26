@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { User, Mail, Lock, Eye, EyeOff, Loader, CheckCircle } from 'lucide-react';
 import { apiCall } from '../api';
 
@@ -12,7 +12,6 @@ const Register = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [isSuccess, setIsSuccess] = useState(false);
-    const navigate = useNavigate();
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -30,7 +29,7 @@ const Register = () => {
 
         setLoading(true);
         try {
-            const data = await apiCall('/auth/register', 'POST', { username, email, password });
+            await apiCall('/auth/register', 'POST', { username, email, password });
             setIsSuccess(true);
         } catch (err) {
             setError(err.message);
