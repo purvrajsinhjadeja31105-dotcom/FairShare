@@ -5,12 +5,11 @@ import { useAuth } from '../auth/AuthContext';
 const SocketContext = createContext(null);
 
 const socketUrl = () => {
-    const apiBase = import.meta.env.VITE_API_BASE_URL;
+    const apiBase = import.meta.env.VITE_API_BASE_URL || '/api';
     if (import.meta.env.VITE_SOCKET_URL) return import.meta.env.VITE_SOCKET_URL;
     // A relative API base ("/api") means the dev server proxies to the backend: connect to this same origin
-    if (apiBase?.startsWith('/')) return window.location.origin;
-    if (apiBase) return apiBase.replace(/\/api\/?$/, '');
-    return import.meta.env.DEV ? 'http://localhost:5000' : 'https://fairshare-backend-9bgf.onrender.com';
+    if (apiBase.startsWith('/')) return window.location.origin;
+    return apiBase.replace(/\/api\/?$/, '');
 };
 
 /** One authenticated Socket.io connection while signed in; the server pushes "something changed" events. */

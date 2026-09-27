@@ -1,11 +1,7 @@
 // Browser origins allowed to call the API and open Socket.io connections.
-const allowedOrigins = [
-    process.env.FRONTEND_URL,
-    'https://split-wise-dusky.vercel.app',
-    'https://fair-share-sage.vercel.app',
-    'http://localhost:5173', // Vite default
-    'http://localhost:3000'
-].map(url => url?.replace(/\/$/, '')).filter(Boolean);
+// In production only the deployed frontend (FRONTEND_URL) may call the API; in development any origin can.
+const { frontendUrl } = require('./urls');
+const allowedOrigins = [frontendUrl()];
 
 const isAllowedOrigin = (origin) => {
     // Requests without an Origin header (curl, mobile apps, server-to-server) aren't subject to CORS

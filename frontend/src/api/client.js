@@ -1,6 +1,7 @@
 // Thin fetch wrapper: adds the auth header, parses JSON, and turns API errors into readable Error objects.
 
-export const API_URL = import.meta.env.VITE_API_BASE_URL || 'https://fairshare-backend-9bgf.onrender.com/api';
+// "/api" in development (the Vite proxy); the Render API address in production (checked in vite.config.js)
+export const API_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export const TOKEN_KEY = 'fairshare_token';
 

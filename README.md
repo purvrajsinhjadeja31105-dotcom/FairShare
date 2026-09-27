@@ -1,7 +1,5 @@
 # 💸 FairShare – Expense Sharing Web Application
 
-[![Live Demo](https://img.shields.io/badge/Live-Demo-brightgreen?style=for-the-badge&logo=vercel)](https://fair-share-sage.vercel.app/)
-
 **Split bills with friends in seconds, and settle with one UPI scan.**
 
 For trips, flatmates and nights out: anyone in the group adds what they paid, everyone sees who owes whom in real time, and debts are settled with a UPI payment that the receiver confirms. See [PRODUCT.md](PRODUCT.md) for the product definition and [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md) for the plan.
@@ -116,9 +114,22 @@ With `EMAIL_MODE=console`, verification and password-reset links are printed in 
 
 ## 🚀 Deployment
 
-- Frontend deployed on Vercel
-- Backend powered by Node.js & Express
-- Real-time communication using Socket.io
+Both apps deploy from `main` on GitHub.
+
+**Backend on Render** (Web Service, root directory `backend`, build `npm ci`, start `npm start`). Environment:
+
+| Variable | Value |
+|---|---|
+| `NODE_ENV` | `production` |
+| `JWT_SECRET` | 32+ random characters |
+| `FRONTEND_URL` | the Vercel site, e.g. `https://fairshare.vercel.app` (CORS + email links) |
+| `BACKEND_URL` | this API's address (optional on Render, which provides `RENDER_EXTERNAL_URL`) |
+| `FIREBASE_SERVICE_ACCOUNT` | the Firebase service account JSON (raw or base64) |
+| `EMAIL_MODE` / `BREVO_API_KEY` / `EMAIL_FROM` | `brevo`, your Brevo API key, a Brevo-verified sender |
+
+Never set `FIRESTORE_EMULATOR_HOST` in production. The server refuses to start if it is set, if `JWT_SECRET` is short, or if the site addresses are missing.
+
+**Frontend on Vercel** (root directory `frontend`, framework Vite). Environment: `VITE_API_BASE_URL` = `https://<your-api>.onrender.com/api`. The build fails without it.
 
 ---
 

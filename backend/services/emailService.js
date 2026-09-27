@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const dns = require('dns');
 require('dotenv').config({ quiet: true });
+const { frontendUrl, backendUrl } = require('../config/urls');
 
 // Force IPv4-first DNS resolution to avoid ENETUNREACH IPv6 errors on cloud platforms like Render
 if (typeof dns.setDefaultResultOrder === 'function') {
@@ -122,11 +123,7 @@ const layout = (title, bodyHtml, url, buttonText, footer) => `
 `;
 
 const sendVerificationEmail = async (email, username, token) => {
-    const rawBackend = process.env.BACKEND_URL;
-    const backendUrl = (rawBackend && !rawBackend.includes('localhost'))
-        ? rawBackend
-        : (process.env.NODE_ENV === 'production' ? 'https://fairshare-backend-9bgf.onrender.com' : (rawBackend || 'http://localhost:5000'));
-    const verificationUrl = `${backendUrl}/api/auth/verify?token=${token}`;
+    const verificationUrl = `${backendUrl()}/api/auth/verify?token=${token}`;
 
     return deliver({
         to: email,
@@ -144,11 +141,7 @@ const sendVerificationEmail = async (email, username, token) => {
 };
 
 const sendPasswordResetEmail = async (email, username, token) => {
-    const rawFrontend = process.env.FRONTEND_URL;
-    const frontendUrl = (rawFrontend && !rawFrontend.includes('localhost'))
-        ? rawFrontend
-        : (process.env.NODE_ENV === 'production' ? 'https://fair-share-sage.vercel.app' : (rawFrontend || 'http://localhost:5173'));
-    const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
+    const resetUrl = `${frontendUrl()}/reset-password?token=${token}`;
 
     return deliver({
         to: email,

@@ -6,6 +6,7 @@ const { JWT_SECRET } = require('../config/env');
 const db = require('../config/db');
 const { hashToken, createToken, expiresIn, isExpired, HOUR } = require('../utils/tokens');
 const emailService = require('../services/emailService');
+const { frontendUrl } = require('../config/urls');
 const { validateBody } = require('../middleware/validate');
 const { loginLimiter, emailLimiter } = require('../middleware/rateLimiters');
 const { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } = require('../validation/authValidation');
@@ -116,17 +117,12 @@ router.get('/verify', async (req, res, next) => {
             verification_token_expiry: null
         });
 
-        const rawFrontend = process.env.FRONTEND_URL;
-        const frontendUrl = (rawFrontend && !rawFrontend.includes('localhost'))
-            ? rawFrontend
-            : (process.env.NODE_ENV === 'production' ? 'https://fair-share-sage.vercel.app' : (rawFrontend || 'http://localhost:5173'));
-
         res.send(`
             <div style="font-family: sans-serif; text-align: center; padding: 50px; background: #f8fafc; min-height: 100vh;">
                 <div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
                     <h1 style="color: #6366f1;">Email Verified Successfully!</h1>
                     <p style="color: #475569; font-size: 16px;">Your account is now active. You can close this window and log in to the app.</p>
-                    <a href="${frontendUrl}/login" style="display: inline-block; background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 20px;">Return to Login</a>
+                    <a href="${frontendUrl()}/login" style="display: inline-block; background: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 20px;">Return to Login</a>
                 </div>
             </div>
         `);
