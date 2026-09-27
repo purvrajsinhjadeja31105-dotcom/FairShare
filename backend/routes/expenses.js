@@ -5,15 +5,15 @@ const { FieldValue } = require('firebase-admin/firestore');
 const authMid = require('../middleware/authMiddleware');
 const socketService = require('../services/socketService');
 const { validateBody } = require('../middleware/validate');
-const { createExpenseSchema, updateExpenseSchema, markWrongSchema, settleSchema } = require('../validation/expenseValidation');
+const { createExpenseSchema, updateExpenseSchema, settleSchema, settlementActionSchema } = require('../validation/expenseValidation');
 const { checkGroupMembership, checkExpenseGroupMembership } = require('../middleware/membershipMiddleware');
 const { checkExpenseSplits, checkExpenseParticipants, checkSettlement } = require('../services/expenseRules');
-const { toPaise, fromPaise } = require('../utils/money');
-const { simplifyDebts } = require('../services/debtSimplifier');
-const { fetchUsernames, fetchGroupNames } = require('../utils/lookups');
-const { SETTLEMENT_STATUS, isSettlement, countsTowardBalance, settlementReceiver } = require('../services/ledger');
+const { todayIso } = require('../utils/dates');
+const { toPaise } = require('../utils/money');
+const { summarizeGroup, buildOverview } = require('../services/balances');
+const { fetchUsernames } = require('../utils/lookups');
+const { SETTLEMENT_STATUS, isSettlement, settlementReceiver } = require('../services/ledger');
 const { AUDIT_ACTIONS, addAuditEntry, diffFields } = require('../services/auditLog');
-const { settlementActionSchema } = require('../validation/expenseValidation');
 
 /** Queues a notification on a WriteBatch/Transaction so it commits together with the change. */
 const addNotification = (writer, userId, message) => {
@@ -25,108 +25,35 @@ const addNotification = (writer, userId, message) => {
     });
 };
 
+/** Edit/delete rule: the payer, or the person who added the entry. No admins. */
+const canModify = (entry, userId) => entry.paid_by === userId || entry.created_by === userId;
+
 const formatRupees = (amount) => `₹${Number(amount).toFixed(2)}`;
 
 router.use(authMid);
 
-// Timestamp -> milliseconds, for sorting newest first
-const createdAtMs = (data) => (data.created_at ? data.created_at.toMillis() : 0);
-
-router.get('/summary', async (req, res, next) => {
+// Everything the Home screen shows, in one request: total, people, groups, pending confirmations.
+// People balances come from each group's suggested payments, so Home and Group always agree.
+router.get('/overview', async (req, res, next) => {
     try {
         const userId = req.user.userId;
+        const groupsSnap = await db.collection('groups').where('members', 'array-contains', userId).get();
+        const groupDocs = groupsSnap.docs.filter(doc => !doc.data().is_personal);
 
-        // Fetch all expenses where the user is involved (either paid or owes)
-        const snapshot = await db.collection('expenses')
-            .where('splits_userIds', 'array-contains', userId)
-            .where('is_wrong', '==', false)
-            .get();
-        const expenses = snapshot.docs.map(doc => doc.data()).filter(countsTowardBalance);
+        const entrySnaps = await Promise.all(groupDocs.map(g => db.collection('expenses').where('group_id', '==', g.id).get()));
+        const groups = groupDocs.map((g, i) => ({
+            id: g.id,
+            name: g.data().name,
+            members: g.data().members || [],
+            entries: entrySnaps[i].docs.map(doc => ({ id: doc.id, ...doc.data() }))
+        }));
 
-        // Resolve every name in two batched reads instead of one read per row
-        const [groupNames, usernames] = await Promise.all([
-            fetchGroupNames(expenses.map(e => e.group_id)),
-            fetchUsernames(expenses.flatMap(e => [e.paid_by, ...(e.splits || []).map(s => s.userId)]))
-        ]);
+        const names = await fetchUsernames(groups.flatMap(g => [
+            ...g.members,
+            ...g.entries.flatMap(e => [e.paid_by, ...(e.splits || []).map(sp => sp.userId)])
+        ]));
 
-        // Keyed by user ID (not username, which isn't unique); balances accumulate in paise
-        const people = {};
-        const addEntry = (otherUserId, groupId, amount) => {
-            if (!people[otherUserId]) people[otherUserId] = { balance: 0, details: [] };
-            people[otherUserId].balance += toPaise(amount);
-            people[otherUserId].details.push({ group: groupNames[groupId], groupId, amount });
-        };
-
-        for (const data of expenses) {
-            for (const split of data.splits || []) {
-                if (!(split.amount_owed > 0)) continue;
-                if (data.paid_by === userId && split.userId !== userId) {
-                    addEntry(split.userId, data.group_id, split.amount_owed);   // you paid, they owe you
-                } else if (data.paid_by !== userId && split.userId === userId) {
-                    addEntry(data.paid_by, data.group_id, -split.amount_owed);  // they paid, you owe them
-                }
-            }
-        }
-
-        const youAreOwed = [];
-        const youOwe = [];
-
-        Object.entries(people).forEach(([otherUserId, data]) => {
-            const base = { userId: otherUserId, username: usernames[otherUserId] };
-            if (data.balance > 0) {
-                youAreOwed.push({
-                    ...base,
-                    amount: fromPaise(data.balance),
-                    details: data.details.filter(d => d.amount > 0)
-                });
-            } else if (data.balance < 0) {
-                youOwe.push({
-                    ...base,
-                    amount: fromPaise(-data.balance),
-                    details: data.details.filter(d => d.amount < 0).map(d => ({ ...d, amount: Math.abs(d.amount) }))
-                });
-            }
-        });
-
-        res.json({ youAreOwed, youOwe });
-    } catch (err) {
-        next(err);
-    }
-});
-
-router.get('/recent', async (req, res, next) => {
-    try {
-        const userId = req.user.userId;
-        const snapshot = await db.collection('expenses')
-            .where('splits_userIds', 'array-contains', userId)
-            .where('is_wrong', '==', false)
-            .get();
-
-        // Pick the 5 newest first, then look up names only for those
-        const latest = snapshot.docs
-            .filter(doc => countsTowardBalance(doc.data()))
-            .sort((a, b) => createdAtMs(b.data()) - createdAtMs(a.data()))
-            .slice(0, 5);
-
-        const [usernames, groupNames] = await Promise.all([
-            fetchUsernames(latest.map(doc => doc.data().paid_by)),
-            fetchGroupNames(latest.map(doc => doc.data().group_id))
-        ]);
-
-        const recentExpenses = latest.map(doc => {
-            const data = doc.data();
-            return {
-                id: doc.id,
-                description: data.description,
-                amount: data.amount,
-                created_at: data.created_at ? data.created_at.toDate() : null,
-                paid_by_name: usernames[data.paid_by],
-                group_name: groupNames[data.group_id],
-                group_id: data.group_id
-            };
-        });
-
-        res.json({ recentExpenses });
+        res.json(buildOverview(userId, groups, names));
     } catch (err) {
         next(err);
     }
@@ -135,14 +62,9 @@ router.get('/recent', async (req, res, next) => {
 router.post('/:groupId', checkGroupMembership, validateBody(createExpenseSchema), async (req, res, next) => {
     try {
         const groupId = req.params.groupId;
-        const { amount, description, splits, paidBy } = req.body;
+        const { amount, description, splits, paidBy, date } = req.body;
         const payerId = paidBy || req.user.userId;
-
-        const groupDoc = req.groupDoc;
         const group = req.group;
-        if (!group.admin_id && !group.is_personal) {
-            return res.status(403).json({ error: 'Cannot add expense: This group has no admin. Please elect one first.' });
-        }
 
         const participantError = checkExpenseParticipants({ members: group.members || [], payerId, splits });
         if (participantError) {
@@ -164,7 +86,7 @@ router.post('/:groupId', checkGroupMembership, validateBody(createExpenseSchema)
             is_wrong: false,
             splits: parsedSplits,
             splits_userIds: uniqueSplitUserIds,
-            hidden_by: [],
+            expense_date: date || todayIso(),
             created_by: req.user.userId,
             created_at: FieldValue.serverTimestamp()
         });
@@ -224,9 +146,7 @@ router.get('/:groupId/all', checkGroupMembership, async (req, res, next) => {
         for (const doc of snapshot.docs) {
             const data = doc.data();
             
-            // Skip deleted entries and ones this user hid
             if (data.deleted_at) continue;
-            if (data.hidden_by && data.hidden_by.includes(req.user.userId)) continue;
 
             const paid_by_name = getUsername(data.paid_by);
             
@@ -248,6 +168,8 @@ router.get('/:groupId/all', checkGroupMembership, async (req, res, next) => {
                 settlement_status: settlement ? (data.settlement_status || SETTLEMENT_STATUS.CONFIRMED) : null,
                 paid_by_name,
                 splits: enrichedSplits,
+                // entries from before dates were recorded use the day they were added
+                expense_date: data.expense_date || (data.created_at ? data.created_at.toDate().toISOString().slice(0, 10) : null),
                 created_at: data.created_at ? data.created_at.toDate() : null
             });
         }
@@ -265,47 +187,13 @@ router.get('/:groupId/all', checkGroupMembership, async (req, res, next) => {
     }
 });
 
-const deleteUserEntriesInGroup = async (req, res, next) => {
-    try {
-        const { groupId, userId } = req.params;
-
-        const groupDoc = req.groupDoc;
-
-        const isGroupOwner = groupDoc.data().created_by === req.user.userId;
-        const isTargetUser = userId === req.user.userId;
-        if (!isGroupOwner && !isTargetUser) {
-            return res.status(403).json({ error: 'Permission denied' });
-        }
-
-        const snapshot = await db.collection('expenses')
-            .where('group_id', '==', groupId)
-            .where('paid_by', '==', userId)
-            .get();
-
-        const active = snapshot.docs.filter(doc => !doc.data().deleted_at);
-        const batch = db.batch();
-        active.forEach(doc => {
-            batch.update(doc.ref, { deleted_at: FieldValue.serverTimestamp(), deleted_by: req.user.userId });
-            addAuditEntry(batch, { groupId, expenseId: doc.id, action: AUDIT_ACTIONS.DELETED, actorId: req.user.userId });
-        });
-        await batch.commit();
-
-        res.json({ message: `Deleted ${active.length} expense entries` });
-    } catch (err) {
-        next(err);
-    }
-};
-
-router.delete('/:groupId/user/:userId/all', checkGroupMembership, deleteUserEntriesInGroup);
-router.delete('/:groupId/user/:userId', checkGroupMembership, deleteUserEntriesInGroup);
-
 router.delete('/:expenseId', checkExpenseGroupMembership, async (req, res, next) => {
     try {
         const expenseId = req.params.expenseId;
         const expDoc = req.expenseDoc;
         const expense = req.expense;
-        if (expense.paid_by !== req.user.userId) {
-            return res.status(403).json({ error: 'Permission denied: Only the expense creator can delete this.' });
+        if (!canModify(expense, req.user.userId)) {
+            return res.status(403).json({ error: 'Only the person who paid or who added this entry can delete it.' });
         }
 
         const groupId = expense.group_id;
@@ -338,20 +226,18 @@ router.delete('/:expenseId', checkExpenseGroupMembership, async (req, res, next)
 router.put('/:expenseId', checkExpenseGroupMembership, validateBody(updateExpenseSchema), async (req, res, next) => {
     try {
         const expenseId = req.params.expenseId;
-        const { amount, description, splits } = req.body;
+        const { amount, description, splits, date, paidBy } = req.body;
         const userId = req.user.userId;
 
         const expDoc = req.expenseDoc;
         const expense = req.expense;
-
         const groupDoc = req.groupDoc;
-        const admin_id = groupDoc.exists ? groupDoc.data().admin_id : null;
 
-        if (expense.paid_by !== userId && admin_id !== userId) {
-            return res.status(403).json({ error: 'Permission denied' });
+        if (!canModify(expense, userId)) {
+            return res.status(403).json({ error: 'Only the person who paid or who added this expense can edit it.' });
         }
-        if (expense.is_wrong) {
-            return res.status(403).json({ error: 'Cannot edit: This entry is marked as WRONG by the admin. Please delete it or wait for admin review.' });
+        if (isSettlement(expense)) {
+            return res.status(400).json({ error: 'Payments cannot be edited. Delete it and record a new one instead.' });
         }
 
         const members = groupDoc.exists ? groupDoc.data().members || [] : [];
@@ -359,8 +245,9 @@ router.put('/:expenseId', checkExpenseGroupMembership, validateBody(updateExpens
         // Only fields that were sent are changed. If the money changes, the result must still add up
         // (checked only then, so older entries with rounding gaps can still be renamed).
         const moneyChanged = amount !== undefined || splits !== undefined;
+        const payerId = paidBy ?? expense.paid_by;
         const splitError = (moneyChanged && checkExpenseSplits({ amount: amount ?? expense.amount, splits: splits ?? expense.splits ?? [] }))
-            || (splits && checkExpenseParticipants({ members, payerId: expense.paid_by, splits }));
+            || ((splits || paidBy) && checkExpenseParticipants({ members, payerId, splits: splits ?? expense.splits ?? [] }));
         if (splitError) {
             return res.status(400).json({ error: splitError });
         }
@@ -368,12 +255,14 @@ router.put('/:expenseId', checkExpenseGroupMembership, validateBody(updateExpens
         const updates = {};
         if (amount !== undefined) updates.amount = amount;
         if (description !== undefined) updates.description = description;
-        if (splits !== undefined) {
-            updates.splits = splits.filter(s => s.amount_owed > 0);
-            updates.splits_userIds = Array.from(new Set([expense.paid_by, ...updates.splits.map(s => s.userId)]));
+        if (date !== undefined) updates.expense_date = date;
+        if (paidBy !== undefined) updates.paid_by = paidBy;
+        if (splits !== undefined || paidBy !== undefined) {
+            updates.splits = (splits ?? expense.splits ?? []).filter(s => s.amount_owed > 0);
+            updates.splits_userIds = Array.from(new Set([payerId, ...updates.splits.map(s => s.userId)]));
         }
 
-        const changes = diffFields(expense, updates, ['amount', 'description', 'splits']);
+        const changes = diffFields(expense, updates, ['amount', 'description', 'splits', 'expense_date', 'paid_by']);
         const batch = db.batch();
         batch.update(expDoc.ref, updates);
         if (Object.keys(changes).length > 0) {
@@ -390,124 +279,18 @@ router.put('/:expenseId', checkExpenseGroupMembership, validateBody(updateExpens
     }
 });
 
-router.post('/:expenseId/mark-wrong', checkExpenseGroupMembership, validateBody(markWrongSchema), async (req, res, next) => {
-    try {
-        const expenseId = req.params.expenseId;
-        const { isWrong } = req.body;
-        const userId = req.user.userId;
-
-        const expDoc = req.expenseDoc;
-        const expense = req.expense;
-
-        const groupDoc = req.groupDoc;
-        if (!groupDoc.exists || groupDoc.data().admin_id !== userId) {
-            return res.status(403).json({ error: 'Only the group admin can mark entries as wrong.' });
-        }
-
-        const members = groupDoc.data().members || [];
-        const statusMsg = isWrong ? 'WRONG' : 'CORRECT';
-        const msg = `Notice: Admin marked the expense "${expense.description}" as ${statusMsg}. Associated debts have been ${isWrong ? 'resolved' : 're-instated'}.`;
-        const creatorMsg = isWrong ? `Admin flagged your entry "${expense.description}" as WRONG.` : `Admin marked your entry "${expense.description}" as CORRECT.`;
-
-        const batch = db.batch();
-        batch.update(expDoc.ref, { is_wrong: !!isWrong });
-        for (const mId of members) {
-            addNotification(batch, mId, mId === expense.paid_by ? creatorMsg : msg);
-        }
-        addAuditEntry(batch, {
-            groupId: expense.group_id, expenseId,
-            action: isWrong ? AUDIT_ACTIONS.MARKED_WRONG : AUDIT_ACTIONS.MARKED_CORRECT, actorId: userId
-        });
-        await batch.commit();
-
-        for (let mId of members) {
-            socketService.emitToUser(mId, 'update_notifications');
-        }
-
-        socketService.emitToGroup(expense.group_id, members, 'update_expenses', { groupId: expense.group_id, action: 'mark_wrong' });
-        socketService.emitToGroup(expense.group_id, members, 'update_summary', { groupId: expense.group_id });
-
-        res.json({ message: isWrong ? 'Entry marked as wrong' : 'Entry marked as correct' });
-    } catch (err) {
-        next(err);
-    }
-});
-
-router.post('/:expenseId/hide', checkExpenseGroupMembership, async (req, res) => {
-    try {
-        const expenseId = req.params.expenseId;
-        const userId = req.user.userId;
-
-        await db.collection('expenses').doc(expenseId).update({
-            hidden_by: FieldValue.arrayUnion(userId)
-        });
-
-        res.json({ message: 'Entry hidden for you' });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
-    }
-});
-
 router.get('/:groupId/settlements', checkGroupMembership, async (req, res, next) => {
     try {
-        const groupId = req.params.groupId;
+        const snapshot = await db.collection('expenses').where('group_id', '==', req.params.groupId).get();
+        const entries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // names for current members and anyone who appears in the ledger (e.g. someone who left)
+        const names = await fetchUsernames([
+            ...(req.group.members || []),
+            ...entries.flatMap(e => [e.paid_by, ...(e.splits || []).map(sp => sp.userId)])
+        ]);
+        const { balances, simplifiedDebts } = summarizeGroup(entries, names);
 
-        // Fetch the group and pre-fetch all member profiles in a single batch to cache usernames
-        const groupDoc = req.groupDoc;
-        const memberIds = groupDoc.exists ? (groupDoc.data().members || []) : [];
-        const userCache = {};
-        if (memberIds.length > 0) {
-            const refs = memberIds.map(mId => db.collection('users').doc(mId));
-            const userDocs = await db.getAll(...refs);
-            userDocs.forEach(uDoc => {
-                userCache[uDoc.id] = uDoc.exists ? uDoc.data().username : 'Unknown';
-            });
-        }
-
-        const getUsername = (uId) => {
-            return userCache[uId] || 'Unknown';
-        };
-
-        const snapshot = await db.collection('expenses')
-            .where('group_id', '==', groupId)
-            .where('is_wrong', '==', false)
-            .get();
-
-        const balancePaise = {};
-        const details = [];
-
-        for (const doc of snapshot.docs) {
-            const data = doc.data();
-            if (!countsTowardBalance(data)) continue; // deleted, or a settlement not yet confirmed
-            const paid_by_name = getUsername(data.paid_by);
-
-            for (const split of data.splits || []) {
-                const owed_by_name = getUsername(split.userId);
-
-                const owedPaise = toPaise(split.amount_owed);
-                balancePaise[data.paid_by] = (balancePaise[data.paid_by] || 0) + owedPaise;
-                balancePaise[split.userId] = (balancePaise[split.userId] || 0) - owedPaise;
-
-                details.push({
-                    expense_id: doc.id,
-                    description: data.description,
-                    date: data.created_at ? data.created_at.toDate() : null,
-                    payer_id: data.paid_by,
-                    payer_name: paid_by_name,
-                    debtor_id: split.userId,
-                    debtor_name: owed_by_name,
-                    amount: split.amount_owed
-                });
-            }
-        }
-
-        const balances = Object.fromEntries(
-            Object.entries(balancePaise).map(([uId, paise]) => [uId, fromPaise(paise)])
-        );
-        const simplifiedDebts = simplifyDebts(balances, userCache);
-
-        res.json({ balances, details, simplifiedDebts });
+        res.json({ balances, simplifiedDebts });
     } catch (err) {
         next(err);
     }
@@ -529,6 +312,19 @@ router.post('/:groupId/settle', checkGroupMembership, validateBody(settleSchema)
         const usernames = await fetchUsernames([actualFromId, toUserId]);
         const description = `Settlement Payment to ${usernames[toUserId]}`;
 
+        // "I've paid" twice for the same payment (double tap, or tapping again while it's waiting)
+        // must not record it twice: the receiver would have to reject the copy.
+        const existing = await db.collection('expenses')
+            .where('group_id', '==', groupId)
+            .where('paid_by', '==', actualFromId)
+            .get();
+        const duplicate = existing.docs.map(d => d.data()).find(e =>
+            isSettlement(e) && !e.deleted_at && e.settlement_status === SETTLEMENT_STATUS.PENDING &&
+            settlementReceiver(e) === toUserId && toPaise(e.amount) === toPaise(amount));
+        if (duplicate) {
+            return res.status(409).json({ error: `This ${formatRupees(amount)} payment to ${usernames[toUserId]} is already waiting for ${usernames[toUserId]} to confirm.` });
+        }
+
         // The receiver saying "I got paid" can be trusted immediately; the payer saying "I paid"
         // stays pending until the receiver confirms, so nobody can wipe out a debt on their own.
         const recordedByReceiver = actingUserId === toUserId;
@@ -547,7 +343,7 @@ router.post('/:groupId/settle', checkGroupMembership, validateBody(settleSchema)
             is_wrong: false,
             splits: [{ userId: toUserId, amount_owed: amount }],
             splits_userIds: [actualFromId, toUserId],
-            hidden_by: [],
+            expense_date: todayIso(),
             created_by: actingUserId,
             created_at: FieldValue.serverTimestamp(),
             ...(recordedByReceiver && { confirmed_at: FieldValue.serverTimestamp() })

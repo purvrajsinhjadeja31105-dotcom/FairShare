@@ -14,7 +14,7 @@ beforeEach(async () => {
         createUser({ username: 'bala', email: 'bala@test.com' }),
         createUser({ username: 'chen', email: 'chen@test.com' })
     ]);
-    groupId = await createGroup({ admin: asha, members: [asha, bala, chen] });
+    groupId = await createGroup({ creator: asha, members: [asha, bala, chen] });
     // asha paid 300 for everyone: bala and chen owe her 100 each
     await as(asha).post(`/api/expenses/${groupId}`, { amount: 300, description: 'Hotel', splits: split([asha, 100], [bala, 100], [chen, 100]) });
 });
@@ -34,6 +34,20 @@ describe('two-sided settlements', () => {
         expect(confirm.status).toBe(200);
         expect((await balancesOf(asha))[bala.id]).toBe(0);
         expect((await notificationsFor(bala)).some(m => m.includes('confirmed receiving your payment'))).toBe(true);
+    });
+
+    test('recording the same payment again while it is waiting is refused', async () => {
+        const first = await as(bala).post(`/api/expenses/${groupId}/settle`, { toUserId: asha.id, amount: 100 });
+        const again = await as(bala).post(`/api/expenses/${groupId}/settle`, { toUserId: asha.id, amount: 100 });
+
+        expect(first.status).toBe(201);
+        expect(again.status).toBe(409);
+        expect(again.body.error).toMatch(/already waiting for asha to confirm/);
+
+        // a different amount is a different payment, and once answered the same amount can be paid again
+        expect((await as(bala).post(`/api/expenses/${groupId}/settle`, { toUserId: asha.id, amount: 50 })).status).toBe(201);
+        await as(asha).post(`/api/expenses/${first.body.settlementId}/settlement`, { action: 'reject' });
+        expect((await as(bala).post(`/api/expenses/${groupId}/settle`, { toUserId: asha.id, amount: 100 })).status).toBe(201);
     });
 
     test('a rejected settlement never changes balances', async () => {
@@ -81,10 +95,11 @@ describe('two-sided settlements', () => {
         expect(expenses.find(e => e.type === 'settlement')).toMatchObject({ settlement_status: 'pending', to_user_id: asha.id });
     });
 
-    test('pending payments are left out of the dashboard summary', async () => {
+    test('pending payments do not change the home balances', async () => {
         await as(bala).post(`/api/expenses/${groupId}/settle`, { toUserId: asha.id, amount: 100 });
-        const summary = (await as(asha).get('/api/expenses/summary')).body;
-        expect(summary.youAreOwed.find(p => p.userId === bala.id).amount).toBe(100);
+        const overview = (await as(asha).get('/api/expenses/overview')).body;
+        expect(overview.people.find(p => p.userId === bala.id).balance).toBe(100);
+        expect(overview.pendingForYou).toHaveLength(1);
     });
 });
 
@@ -129,12 +144,6 @@ describe('soft delete and audit log', () => {
 
         const actions = (await auditFor(body.settlementId)).map(a => `${a.action}:${a.actor_id}`).sort();
         expect(actions).toEqual([`settlement_confirmed:${asha.id}`, `settlement_recorded:${bala.id}`].sort());
-    });
-
-    test('marking wrong is audited', async () => {
-        const [hotel] = (await as(asha).get(`/api/expenses/${groupId}/all`)).body.expenses;
-        await as(asha).post(`/api/expenses/${hotel.id}/mark-wrong`, { isWrong: true });
-        expect((await auditFor(hotel.id)).map(a => a.action)).toContain('marked_wrong');
     });
 
     test('non-members cannot read an entry history', async () => {

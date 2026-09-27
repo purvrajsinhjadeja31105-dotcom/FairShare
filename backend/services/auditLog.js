@@ -10,8 +10,6 @@ const AUDIT_ACTIONS = {
     CREATED: 'created',
     UPDATED: 'updated',
     DELETED: 'deleted',
-    MARKED_WRONG: 'marked_wrong',
-    MARKED_CORRECT: 'marked_correct',
     SETTLEMENT_RECORDED: 'settlement_recorded',
     SETTLEMENT_CONFIRMED: 'settlement_confirmed',
     SETTLEMENT_REJECTED: 'settlement_rejected'

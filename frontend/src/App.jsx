@@ -1,218 +1,51 @@
-import React, { useState, useEffect, useContext, useRef } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
-import { Sun, Moon, Bell, Menu, LogOut } from 'lucide-react';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { useAuth } from './auth/AuthContext';
+import { AppShell } from './components/AppShell';
 import Landing from './pages/Landing';
-import Login from './pages/Login';
-import Register from './pages/Register';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
-import Dashboard from './pages/Dashboard';
-import GroupView from './pages/GroupView';
-import AddExpense from './pages/AddExpense';
-import CreateGroup from './pages/CreateGroup';
-import OwedSummary from './pages/OwedSummary';
-import PersonalHistory from './pages/PersonalHistory';
-import DebtDetail from './pages/DebtDetail';
-import { ThemeContext } from './context/ThemeContext';
-import { apiCall } from './api';
-import { useSocket } from './context/SocketContext';
-import './index.css';
+import Home from './pages/Home';
+import Group from './pages/Group';
+import ExpenseForm from './pages/ExpenseForm';
+import Join from './pages/Join';
+import Activity from './pages/Activity';
+import Account from './pages/Account';
+import { Login, Register, ForgotPassword, ResetPassword } from './pages/auth/AuthPages';
 
-// Removed AuthRoute as per user request to allow accessing login/landing pages while authenticated
-// Redirect to login if not logged in (for protected pages)
-const PrivateRoute = ({ children }) => {
-  const token = localStorage.getItem('fairshare_token');
-  return token ? children : <Navigate to="/login" />;
+/** Signed-out visitors go to login, and come back here afterwards. */
+const RequireAuth = ({ children }) => {
+    const { isSignedIn } = useAuth();
+    const location = useLocation();
+    return isSignedIn ? children : <Navigate to="/login" replace state={{ from: location.pathname }} />;
 };
 
-function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('fairshare_token'));
-  const { theme, toggleTheme } = useContext(ThemeContext);
-  const [unreadNotifs, setUnreadNotifs] = useState(0);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const socket = useSocket();
-  const menuRef = useRef(null);
+// Old URLs (bookmarks, links in old emails) keep working
+const LegacyGroupRedirect = () => <Navigate to={`/groups/${useParams().id}`} replace />;
 
-  useEffect(() => {
-    const handleStorageChange = () => setIsAuthenticated(!!localStorage.getItem('fairshare_token'));
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
+export default function App() {
+    return (
+        <BrowserRouter>
+            <AppShell>
+                <Routes>
+                    <Route path="/" element={<Landing />} />
+                    <Route path="/login" element={<Login />} />
+                    <Route path="/register" element={<Register />} />
+                    <Route path="/forgot-password" element={<ForgotPassword />} />
+                    <Route path="/reset-password" element={<ResetPassword />} />
+                    <Route path="/join/:code" element={<Join />} />
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      let isMounted = true;
-      apiCall('/notifications').then(res => {
-        if (!isMounted) return;
-        const unread = res.notifications.filter(n => !n.is_read).length;
-        setUnreadNotifs(unread);
-      }).catch(console.error);
-      return () => { isMounted = false; };
-    }
-  }, [isAuthenticated]);
+                    <Route path="/home" element={<RequireAuth><Home /></RequireAuth>} />
+                    <Route path="/groups/:groupId" element={<RequireAuth><Group /></RequireAuth>} />
+                    <Route path="/groups/:groupId/expenses/new" element={<RequireAuth><ExpenseForm /></RequireAuth>} />
+                    <Route path="/groups/:groupId/expenses/:expenseId/edit" element={<RequireAuth><ExpenseForm /></RequireAuth>} />
+                    <Route path="/activity" element={<RequireAuth><Activity /></RequireAuth>} />
+                    <Route path="/account" element={<RequireAuth><Account /></RequireAuth>} />
 
-  useEffect(() => {
-    if (socket) {
-      socket.on('update_notifications', () => {
-        apiCall('/notifications').then(res => {
-          const unread = res.notifications.filter(n => !n.is_read).length;
-          setUnreadNotifs(unread);
-        }).catch(console.error);
-      });
-      return () => socket.off('update_notifications');
-    }
-  }, [socket]);
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (menuRef.current && !menuRef.current.contains(event.target)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const handleLogout = () => {
-    localStorage.removeItem('fairshare_token');
-    localStorage.removeItem('fairshare_user');
-    setIsAuthenticated(false);
-    window.location.href = '/';
-  };
-
-  return (
-    <Router>
-      <nav className="navbar">
-        <Link to={isAuthenticated ? '/dashboard' : '/'} style={{ textDecoration: 'none' }}>
-          <h2 className="text-gradient" style={{ margin: 0 }}>FairShare</h2>
-        </Link>
-        <div ref={menuRef} style={{ position: 'relative' }}>
-          {isAuthenticated && (
-            <button
-              className="btn-ghost icon-btn"
-              onClick={() => setMenuOpen(prev => !prev)}
-              aria-label="Open menu"
-            >
-              <Menu size={24} />
-            </button>
-          )}
-
-          {isAuthenticated && menuOpen && (
-            <div className="action-menu">
-              <Link to="/notifications" className="action-menu-item" onClick={() => setMenuOpen(false)}>
-                <Bell size={18} />
-                <span>Notifications</span>
-                {unreadNotifs > 0 && (
-                  <span className="menu-badge">{unreadNotifs}</span>
-                )}
-              </Link>
-
-              <button className="action-menu-item" onClick={() => { toggleTheme(); setMenuOpen(false); }}>
-                {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
-                <span>Toggle theme</span>
-              </button>
-
-              <button className="action-menu-item" onClick={handleLogout}>
-                <LogOut size={18} />
-                <span>Logout</span>
-              </button>
-            </div>
-          )}
-
-          {!isAuthenticated && (
-            <div className="unauth-nav" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <button
-                className="btn-ghost icon-btn"
-                onClick={toggleTheme}
-                aria-label="Toggle theme"
-              >
-                {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
-              </button>
-              <Link to="/login" style={{ textDecoration: 'none' }}><button className="btn-ghost">Login</button></Link>
-              <Link to="/register" style={{ textDecoration: 'none' }}><button className="btn-primary">Sign Up</button></Link>
-            </div>
-          )}
-        </div>
-      </nav>
-
-      <div className="app-container">
-        <Routes>
-          {/* Public landing */}
-          <Route
-            path="/"
-            element={<Landing />}
-          />
-
-          {/* Auth pages */}
-          <Route path="/login" element={<Login setIsAuthenticated={setIsAuthenticated} />} />
-          <Route path="/register" element={<Register setIsAuthenticated={setIsAuthenticated} />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
-
-          {/* Protected pages */}
-          <Route path="/dashboard" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
-          <Route path="/group/:id" element={<PrivateRoute><GroupView /></PrivateRoute>} />
-          <Route path="/group/:id/add-expense" element={<PrivateRoute><AddExpense /></PrivateRoute>} />
-          <Route path="/group/:id/edit-expense/:expenseId" element={<PrivateRoute><AddExpense /></PrivateRoute>} />
-          <Route path="/create-group" element={<PrivateRoute><CreateGroup /></PrivateRoute>} />
-          <Route path="/owed-by-others" element={<PrivateRoute><OwedSummary /></PrivateRoute>} />
-          <Route path="/you-owe" element={<PrivateRoute><OwedSummary /></PrivateRoute>} />
-          <Route path="/personal-history" element={<PrivateRoute><PersonalHistory /></PrivateRoute>} />
-          <Route path="/group/:groupId/debt/:userId" element={<PrivateRoute><DebtDetail /></PrivateRoute>} />
-          <Route path="/notifications" element={<PrivateRoute><NotificationsPage setUnreadNotifs={setUnreadNotifs} /></PrivateRoute>} />
-
-          {/* Fallback */}
-          <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-
-        <footer style={{
-          textAlign: 'center',
-          padding: '2rem 1rem 1rem',
-          marginTop: '3rem',
-          color: 'var(--text-secondary)',
-          fontSize: '0.9rem',
-          borderTop: '1px solid var(--border-color)'
-        }}>
-          &copy; {new Date().getFullYear()} FairShare. Made by Purvrajsinh.
-        </footer>
-      </div>
-    </Router>
-  );
+                    <Route path="/dashboard" element={<Navigate to="/home" replace />} />
+                    <Route path="/group/:id" element={<LegacyGroupRedirect />} />
+                    <Route path="/notifications" element={<Navigate to="/activity" replace />} />
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+                <footer className="footer">© {new Date().getFullYear()} FairShare</footer>
+            </AppShell>
+        </BrowserRouter>
+    );
 }
-
-const NotificationsPage = ({ setUnreadNotifs }) => {
-  const [notifs, setNotifs] = useState([]);
-
-  useEffect(() => {
-    apiCall('/notifications').then(res => {
-      setNotifs(res.notifications);
-      apiCall('/notifications/read', 'POST').catch(console.error);
-      setUnreadNotifs(0);
-    }).catch(console.error);
-  }, []);
-
-  return (
-    <div className="glass-card" style={{ maxWidth: 600, margin: '0 auto' }}>
-      <h2>Notifications</h2>
-      {notifs.length === 0 ? <p>No notifications yet!</p> : (
-        <ul>
-          {notifs.map(n => (
-            <li key={n.id} style={{
-              opacity: n.is_read ? 0.7 : 1,
-              borderLeft: n.is_read ? 'none' : '4px solid var(--accent-primary)',
-              paddingLeft: '0.75rem',
-              marginBottom: '0.75rem'
-            }}>
-              <p style={{ color: 'var(--text-primary)', margin: '0 0 0.25rem 0' }}>{n.message}</p>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                {new Date(n.created_at).toLocaleString()}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-};
-
-export default App;

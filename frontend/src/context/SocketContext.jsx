@@ -1,57 +1,54 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import { useAuth } from '../auth/AuthContext';
 
-const SocketContext = createContext();
+const SocketContext = createContext(null);
 
-export const useSocket = () => useContext(SocketContext);
+const socketUrl = () => {
+    const apiBase = import.meta.env.VITE_API_BASE_URL;
+    if (import.meta.env.VITE_SOCKET_URL) return import.meta.env.VITE_SOCKET_URL;
+    // A relative API base ("/api") means the dev server proxies to the backend: connect to this same origin
+    if (apiBase?.startsWith('/')) return window.location.origin;
+    if (apiBase) return apiBase.replace(/\/api\/?$/, '');
+    return import.meta.env.DEV ? 'http://localhost:5000' : 'https://fairshare-backend-9bgf.onrender.com';
+};
 
+/** One authenticated Socket.io connection while signed in; the server pushes "something changed" events. */
 export const SocketProvider = ({ children }) => {
+    const { token } = useAuth();
     const [socket, setSocket] = useState(null);
-    const [token, setToken] = useState(localStorage.getItem('fairshare_token'));
 
     useEffect(() => {
-        const handleAuthChange = () => setToken(localStorage.getItem('fairshare_token'));
-        window.addEventListener('storage', handleAuthChange);
-        window.addEventListener('auth_change', handleAuthChange);
+        if (!token) return undefined;
+        const connection = io(socketUrl(), { auth: { token } });
+        setSocket(connection);
         return () => {
-            window.removeEventListener('storage', handleAuthChange);
-            window.removeEventListener('auth_change', handleAuthChange);
+            connection.disconnect();
+            setSocket(null);
         };
-    }, []);
-
-    useEffect(() => {
-        if (token) {
-            const socketUrl = import.meta.env.VITE_SOCKET_URL ||
-                (import.meta.env.VITE_API_BASE_URL ? import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, '') : null) ||
-                (import.meta.env.DEV ? 'http://localhost:5000' : 'https://fairshare-backend-9bgf.onrender.com');
-            const newSocket = io(socketUrl, {
-                auth: { token }
-            });
-
-            newSocket.on('connect', () => {
-                console.log('Socket connected:', newSocket.id);
-            });
-
-            newSocket.on('connect_error', (err) => {
-                console.error('Socket connection error:', err.message);
-            });
-
-            setSocket(newSocket);
-
-            return () => {
-                newSocket.disconnect();
-            };
-        } else {
-            if (socket) {
-                socket.disconnect();
-                setSocket(null);
-            }
-        }
     }, [token]);
 
-    return (
-        <SocketContext.Provider value={socket}>
-            {children}
-        </SocketContext.Provider>
-    );
+    return <SocketContext.Provider value={socket}>{children}</SocketContext.Provider>;
+};
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const useSocket = () => useContext(SocketContext);
+
+/** Calls `onEvent` whenever any of the given server events arrives. */
+// eslint-disable-next-line react-refresh/only-export-components
+export const useSocketEvents = (events, onEvent) => {
+    const socket = useSocket();
+    const handlerRef = useRef(onEvent);
+    useEffect(() => {
+        handlerRef.current = onEvent;
+    });
+
+    const eventKey = events.join(',');
+    useEffect(() => {
+        if (!socket) return undefined;
+        const handler = (payload) => handlerRef.current(payload);
+        const names = eventKey.split(',');
+        names.forEach(name => socket.on(name, handler));
+        return () => names.forEach(name => socket.off(name, handler));
+    }, [socket, eventKey]);
 };

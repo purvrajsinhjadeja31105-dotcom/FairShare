@@ -1,6 +1,10 @@
 const { z } = require('zod');
 const { roundMoney } = require('../utils/money');
 const { checkExpenseSplits } = require('../services/expenseRules');
+const { isValidIsoDate } = require('../utils/dates');
+
+// Calendar date of the expense, e.g. "2026-09-27"
+const expenseDate = z.string().refine(isValidIsoDate, { message: 'Date must be a valid date in YYYY-MM-DD format' });
 
 // Coerces string/number input to a rupee amount rounded to 2 decimals (NaN when unparseable)
 const money = z.union([z.number(), z.string()])
@@ -26,18 +30,17 @@ const createExpenseSchema = z.object({
     amount: positiveAmount,
     description: z.string().trim().min(1, 'Description is required').max(255),
     splits: z.array(splitSchema).min(1, 'At least one split is required'),
-    paidBy: z.string().optional()
+    paidBy: z.string().optional(),
+    date: expenseDate.optional()
 }).superRefine(splitsMatchTotal);
 
 const updateExpenseSchema = z.object({
     amount: positiveAmount.optional(),
     description: z.string().trim().min(1, 'Description cannot be empty').max(255).optional(),
-    splits: z.array(splitSchema).min(1, 'At least one split is required').optional()
+    splits: z.array(splitSchema).min(1, 'At least one split is required').optional(),
+    paidBy: z.string().min(1).optional(),
+    date: expenseDate.optional()
 }).superRefine(splitsMatchTotal);
-
-const markWrongSchema = z.object({
-    isWrong: z.boolean({ required_error: 'isWrong boolean status is required' })
-});
 
 const settleSchema = z.object({
     toUserId: z.string().min(1, 'Recipient user ID is required'),
@@ -53,6 +56,5 @@ module.exports = {
     settlementActionSchema,
     createExpenseSchema,
     updateExpenseSchema,
-    markWrongSchema,
     settleSchema
 };

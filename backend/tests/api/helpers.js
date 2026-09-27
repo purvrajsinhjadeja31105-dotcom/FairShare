@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const request = require('supertest');
 const { FieldValue } = require('firebase-admin/firestore');
 const app = require('../../app');
+const { createInviteCode } = require('../../utils/inviteCode');
 const db = require('../../config/db');
 
 const PASSWORD = 'password123';
@@ -30,14 +31,14 @@ const createUser = async ({ username, email, verified = true, ...extra }) => {
     return { id: ref.id, username, email, token: jwt.sign({ userId: ref.id, username }, process.env.JWT_SECRET) };
 };
 
-const createGroup = async ({ name = 'Trip', admin, members }) => {
+const createGroup = async ({ name = 'Trip', creator, members, ...extra }) => {
     const ref = await db.collection('groups').add({
         name,
-        is_personal: false,
-        created_by: admin.id,
-        admin_id: admin.id,
+        created_by: creator.id,
         members: members.map(m => m.id),
-        created_at: FieldValue.serverTimestamp()
+        invite_code: createInviteCode(),
+        created_at: FieldValue.serverTimestamp(),
+        ...extra
     });
     return ref.id;
 };

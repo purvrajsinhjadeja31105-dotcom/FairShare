@@ -14,7 +14,7 @@ beforeEach(async () => {
         createUser({ username: 'chen', email: 'chen@test.com' }),
         createUser({ username: 'zed', email: 'zed@test.com' })
     ]);
-    groupId = await createGroup({ admin: asha, members: [asha, bala, chen] });
+    groupId = await createGroup({ creator: asha, members: [asha, bala, chen] });
 });
 afterEach(() => jest.restoreAllMocks());
 
@@ -68,7 +68,7 @@ describe('editing expenses', () => {
         expect((await as(asha).put(`/api/expenses/${expenseId}`, { amount: 120 })).status).toBe(400);
     });
 
-    test('only the payer or admin can edit', async () => {
+    test('someone who neither paid nor added it cannot edit', async () => {
         expect((await as(bala).put(`/api/expenses/${expenseId}`, { description: 'hacked' })).status).toBe(403);
     });
 });
@@ -98,34 +98,16 @@ describe('balances and settlements', () => {
     });
 });
 
-describe('dashboard summary and recent activity', () => {
-    test('summary returns userId and keeps people with the same username apart', async () => {
+describe('home overview', () => {
+    test('keeps people with the same username apart (keyed by user ID)', async () => {
         const rahul1 = await createUser({ username: 'rahul', email: 'r1@test.com' });
         const rahul2 = await createUser({ username: 'rahul', email: 'r2@test.com' });
-        const g = await createGroup({ admin: asha, members: [asha, rahul1, rahul2] });
+        const g = await createGroup({ creator: asha, members: [asha, rahul1, rahul2] });
         await as(asha).post(`/api/expenses/${g}`, { amount: 30, description: 'x', splits: split([asha, 10], [rahul1, 10], [rahul2, 10]) });
 
-        const res = await as(asha).get('/api/expenses/summary');
+        const { people } = (await as(asha).get('/api/expenses/overview')).body;
 
-        expect(res.status).toBe(200);
-        expect(res.body.youAreOwed).toHaveLength(2);
-        expect(res.body.youAreOwed.map(p => p.userId).sort()).toEqual([rahul1.id, rahul2.id].sort());
-        res.body.youAreOwed.forEach(p => {
-            expect(p.username).toBe('rahul');
-            expect(p.amount).toBe(10);
-            expect(p.details[0].group).toBe('Trip');
-        });
-    });
-
-    test('recent returns the 5 newest expenses with names filled in', async () => {
-        for (let i = 1; i <= 7; i++) {
-            await as(asha).post(`/api/expenses/${groupId}`, { amount: 3, description: `Item ${i}`, splits: split([asha, 1], [bala, 1], [chen, 1]) });
-        }
-
-        const res = await as(bala).get('/api/expenses/recent');
-
-        expect(res.status).toBe(200);
-        expect(res.body.recentExpenses.map(e => e.description)).toEqual(['Item 7', 'Item 6', 'Item 5', 'Item 4', 'Item 3']);
-        expect(res.body.recentExpenses[0]).toMatchObject({ paid_by_name: 'asha', group_name: 'Trip', group_id: groupId });
+        expect(people.map(p => p.userId).sort()).toEqual([rahul1.id, rahul2.id].sort());
+        people.forEach(p => expect(p).toMatchObject({ username: 'rahul', balance: 10, groups: [{ groupId: g, groupName: 'Trip', amount: 10 }] }));
     });
 });

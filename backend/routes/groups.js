@@ -1,39 +1,52 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
-const { FieldValue, FieldPath } = require('firebase-admin/firestore');
+const { FieldValue } = require('firebase-admin/firestore');
 const authMid = require('../middleware/authMiddleware');
 const socketService = require('../services/socketService');
 const { validateBody } = require('../middleware/validate');
-const { createGroupSchema, addMemberSchema, voteSchema } = require('../validation/groupValidation');
+const { createGroupSchema, addMemberSchema } = require('../validation/groupValidation');
 const { checkGroupMembership } = require('../middleware/membershipMiddleware');
+const { groupBalancesPaise } = require('../services/balances');
+const { fetchUsernames } = require('../utils/lookups');
+const { createInviteCode, isValidInviteCode } = require('../utils/inviteCode');
+const { joinLimiter } = require('../middleware/rateLimiters');
 
 router.use(authMid);
 
+const groupEntries = async (groupId) =>
+    (await db.collection('expenses').where('group_id', '==', groupId).get()).docs.map(doc => doc.data());
+
+// Everyone in a group is equal; the creator additionally manages the group (delete, reset invite link)
+const toGroupResponse = (doc, extra = {}) => {
+    const data = doc.data();
+    return {
+        id: doc.id,
+        name: data.name,
+        created_by: data.created_by,
+        members: data.members || [],
+        member_count: (data.members || []).length,
+        created_at: data.created_at ? data.created_at.toDate() : null,
+        ...extra
+    };
+};
+
 router.post('/', validateBody(createGroupSchema), async (req, res, next) => {
     try {
-        const { name, is_personal, members } = req.body;
+        const { name } = req.body;
         const userId = req.user.userId;
-        const isAdminForPersonal = !!is_personal;
-
-        const memberSet = new Set(members || []);
-        memberSet.add(userId);
-        const membersArray = Array.from(memberSet);
+        const membersArray = [userId];
 
         const newGroupRef = await db.collection('groups').add({
-            name: name || 'Personal Group',
-            is_personal: isAdminForPersonal,
+            name,
             created_by: userId,
-            admin_id: isAdminForPersonal ? userId : null,
             members: membersArray,
+            invite_code: createInviteCode(),
             created_at: FieldValue.serverTimestamp()
         });
 
-        const groupId = newGroupRef.id;
-
-        socketService.emitToGroup(groupId, membersArray, 'update_groups', { groupId, action: 'created' });
-
-        res.status(201).json({ message: 'Group created', groupId });
+        socketService.emitToGroup(newGroupRef.id, membersArray, 'update_groups', { groupId: newGroupRef.id, action: 'created' });
+        res.status(201).json({ message: 'Group created', groupId: newGroupRef.id });
     } catch (err) {
         next(err);
     }
@@ -41,28 +54,14 @@ router.post('/', validateBody(createGroupSchema), async (req, res, next) => {
 
 router.get('/', async (req, res, next) => {
     try {
-        const userId = req.user.userId;
         const snapshot = await db.collection('groups')
-            .where('members', 'array-contains', userId)
+            .where('members', 'array-contains', req.user.userId)
             .get();
 
-        const groups = [];
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            groups.push({
-                id: doc.id,
-                ...data,
-                member_count: data.members ? data.members.length : 0,
-                created_at: data.created_at ? data.created_at.toDate() : null
-            });
-        });
-
-        // Sort in-memory descending by created_at
-        groups.sort((a, b) => {
-            const timeA = a.created_at ? a.created_at.getTime() : 0;
-            const timeB = b.created_at ? b.created_at.getTime() : 0;
-            return timeB - timeA;
-        });
+        const groups = snapshot.docs
+            .filter(doc => !doc.data().is_personal) // legacy one-person "Personal Tracker" groups are no longer shown
+            .map(doc => toGroupResponse(doc))
+            .sort((a, b) => (b.created_at?.getTime() || 0) - (a.created_at?.getTime() || 0));
 
         res.json({ groups });
     } catch (err) {
@@ -70,289 +69,162 @@ router.get('/', async (req, res, next) => {
     }
 });
 
-router.post('/:groupId/members', checkGroupMembership, validateBody(addMemberSchema), async (req, res, next) => {
+// ---------- Invite links ----------
+// Declared before the /:groupId routes so "invite" is never treated as a group ID.
+
+const findGroupByInvite = async (code) => {
+    if (!isValidInviteCode(code)) return null;
+    const snapshot = await db.collection('groups').where('invite_code', '==', code).limit(1).get();
+    return snapshot.empty ? null : snapshot.docs[0];
+};
+
+// Preview for the "You're invited to Goa Trip" page
+router.get('/invite/:code', async (req, res, next) => {
     try {
-        const { email, userId } = req.body;
-        const groupId = req.params.groupId;
+        const groupDoc = await findGroupByInvite(req.params.code);
+        if (!groupDoc) return res.status(404).json({ error: 'This invite link is invalid or has been reset. Ask for a new link.' });
 
-        let finalUserId = userId;
-
-        if (!finalUserId && email) {
-            const usersSnap = await db.collection('users').where('email', '==', email).limit(1).get();
-            if (usersSnap.empty) return res.status(404).json({ error: 'User not found' });
-            finalUserId = usersSnap.docs[0].id;
-        }
-
-        if (!finalUserId) return res.status(400).json({ error: 'User identifier required' });
-
-        const groupRef = db.collection('groups').doc(groupId);
-        await groupRef.update({
-            members: FieldValue.arrayUnion(finalUserId)
+        const group = groupDoc.data();
+        const names = await fetchUsernames([group.created_by]);
+        res.json({
+            group: {
+                id: groupDoc.id,
+                name: group.name,
+                member_count: (group.members || []).length,
+                created_by_name: names[group.created_by]
+            },
+            alreadyMember: (group.members || []).includes(req.user.userId)
         });
-
-        const groupDoc = await groupRef.get();
-        const allMembers = groupDoc.data().members || [];
-        
-        socketService.emitToGroup(groupId, allMembers, 'update_groups', { groupId, action: 'member_added' });
-
-        res.status(200).json({ message: 'Member added' });
     } catch (err) {
         next(err);
     }
 });
 
-router.get('/:groupId/members', checkGroupMembership, async (req, res) => {
+router.post('/invite/:code/join', joinLimiter, async (req, res, next) => {
     try {
-        const groupId = req.params.groupId;
-        const groupDoc = req.groupDoc;
-        
-        const memberIds = groupDoc.data().members || [];
-        
+        const groupDoc = await findGroupByInvite(req.params.code);
+        if (!groupDoc) return res.status(404).json({ error: 'This invite link is invalid or has been reset. Ask for a new link.' });
+
+        const userId = req.user.userId;
+        const members = groupDoc.data().members || [];
+        if (!members.includes(userId)) {
+            await groupDoc.ref.update({ members: FieldValue.arrayUnion(userId) });
+            socketService.emitToGroup(groupDoc.id, [...members, userId], 'update_groups', { groupId: groupDoc.id, action: 'member_added' });
+        }
+        res.json({ message: 'Joined group', groupId: groupDoc.id });
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.get('/:groupId/invite', checkGroupMembership, async (req, res, next) => {
+    try {
+        let code = req.group.invite_code;
+        if (!code) {
+            // groups created before invite links existed get a code the first time someone asks
+            code = createInviteCode();
+            await req.groupDoc.ref.update({ invite_code: code });
+        }
+        res.json({ code });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// Creator can reset the link, e.g. if it was shared somewhere by mistake
+router.post('/:groupId/invite/reset', checkGroupMembership, async (req, res, next) => {
+    try {
+        if (req.group.created_by !== req.user.userId) {
+            return res.status(403).json({ error: 'Only the person who created the group can reset its invite link' });
+        }
+        const code = createInviteCode();
+        await req.groupDoc.ref.update({ invite_code: code });
+        res.json({ code });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ---------- Members ----------
+
+router.post('/:groupId/members', checkGroupMembership, validateBody(addMemberSchema), async (req, res, next) => {
+    try {
+        const { email } = req.body;
+        const usersSnap = await db.collection('users').where('email', '==', email).limit(1).get();
+        if (usersSnap.empty) {
+            return res.status(404).json({ error: 'No FairShare account uses that email. Share the invite link instead.' });
+        }
+
+        const newMemberId = usersSnap.docs[0].id;
+        await req.groupDoc.ref.update({ members: FieldValue.arrayUnion(newMemberId) });
+
+        const allMembers = Array.from(new Set([...(req.group.members || []), newMemberId]));
+        socketService.emitToGroup(req.params.groupId, allMembers, 'update_groups', { groupId: req.params.groupId, action: 'member_added' });
+        res.json({ message: 'Member added' });
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.get('/:groupId/members', checkGroupMembership, async (req, res, next) => {
+    try {
+        const memberIds = req.group.members || [];
         if (memberIds.length === 0) return res.json({ members: [] });
 
-        // Firestore 'in' queries support max 30 items. We split if necessary.
-        const members = [];
-        for (let i = 0; i < memberIds.length; i += 30) {
-            const chunk = memberIds.slice(i, i + 30);
-            const usersSnap = await db.collection('users').where(FieldPath.documentId(), 'in', chunk).get();
-            usersSnap.forEach(doc => {
-                members.push({ 
-                    id: doc.id, 
-                    username: doc.data().username, 
-                    email: doc.data().email,
-                    upi_id: doc.data().upi_id || null
-                });
-            });
-        }
+        const docs = await db.getAll(...memberIds.map(id => db.collection('users').doc(id)));
+        const members = docs.filter(doc => doc.exists).map(doc => ({
+            id: doc.id,
+            username: doc.data().username,
+            upi_id: doc.data().upi_id || null
+        }));
 
         res.json({ members });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
+        next(err);
     }
 });
 
-router.get('/:groupId', checkGroupMembership, async (req, res) => {
-    try {
-        const groupId = req.params.groupId;
-        const groupDoc = req.groupDoc;
-        const groupData = req.group;
-        let admin_name = null;
-
-        if (groupData.admin_id) {
-            const adminDoc = await db.collection('users').doc(groupData.admin_id).get();
-            if (adminDoc.exists) {
-                admin_name = adminDoc.data().username;
-            }
-        }
-
-        res.json({ group: { id: groupDoc.id, ...groupData, admin_name } });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
-    }
+router.get('/:groupId', checkGroupMembership, (req, res) => {
+    res.json({ group: toGroupResponse(req.groupDoc) });
 });
 
-// Admin Polling Routes
+// ---------- Leaving and deleting ----------
 
-router.get('/:groupId/active-poll', checkGroupMembership, async (req, res, next) => {
+router.post('/:groupId/leave', checkGroupMembership, async (req, res, next) => {
     try {
-        const groupId = req.params.groupId;
-        const pollsSnap = await db.collection('groups').doc(groupId).collection('polls')
-            .where('status', '==', 'active')
-            .get();
-        
-        if (pollsSnap.empty) return res.json({ poll: null });
-
-        const polls = [];
-        pollsSnap.forEach(doc => {
-            polls.push({ id: doc.id, data: doc.data() });
-        });
-
-        // Sort in-memory descending by created_at
-        polls.sort((a, b) => {
-            const timeA = a.data.created_at ? a.data.created_at.toDate().getTime() : 0;
-            const timeB = b.data.created_at ? b.data.created_at.toDate().getTime() : 0;
-            return timeB - timeA;
-        });
-
-        const pollDoc = polls[0];
-        const pollId = pollDoc.id;
-        const pollData = pollDoc.data;
-
-        // Get votes
-        const votesSnap = await db.collection('groups').doc(groupId).collection('polls').doc(pollId).collection('votes').get();
-        
-        const voteCountsMap = {};
-        let myVote = null;
-
-        for (const voteDoc of votesSnap.docs) {
-            const vData = voteDoc.data();
-            if (vData.voter_id === req.user.userId) {
-                myVote = vData.candidate_id;
-            }
-            if (!voteCountsMap[vData.candidate_id]) {
-                voteCountsMap[vData.candidate_id] = 0;
-            }
-            voteCountsMap[vData.candidate_id]++;
-        }
-
-        const voteCounts = [];
-        for (const [candidateId, votes] of Object.entries(voteCountsMap)) {
-            const candDoc = await db.collection('users').doc(candidateId).get();
-            voteCounts.push({
-                candidate_id: candidateId,
-                candidate_name: candDoc.exists ? candDoc.data().username : 'Unknown',
-                votes: votes
-            });
-        }
-
-        res.json({
-            poll: {
-                id: pollId,
-                ...pollData,
-                votes: voteCounts,
-                myVote: myVote
-            }
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
-    }
-});
-
-router.post('/:groupId/poll', checkGroupMembership, async (req, res) => {
-    try {
-        const groupId = req.params.groupId;
         const userId = req.user.userId;
-
-        const pollsRef = db.collection('groups').doc(groupId).collection('polls');
-        
-        // Mark existing active polls as expired
-        const activePolls = await pollsRef.where('status', '==', 'active').get();
-        const batch = db.batch();
-        activePolls.forEach(doc => {
-            batch.update(doc.ref, { status: 'expired' });
-        });
-        await batch.commit();
-
-        // Start new poll
-        const newPollRef = await pollsRef.add({
-            started_by: userId,
-            status: 'active',
-            created_at: FieldValue.serverTimestamp()
-        });
-
-        const groupDoc = await db.collection('groups').doc(groupId).get();
-        const members = groupDoc.exists ? groupDoc.data().members || [] : [];
-        
-        socketService.emitToGroup(groupId, members, 'update_poll', { groupId, pollId: newPollRef.id });
-
-        res.status(201).json({ message: 'Poll started', pollId: newPollRef.id });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
-    }
-});
-
-router.post('/:groupId/vote', checkGroupMembership, validateBody(voteSchema), async (req, res, next) => {
-    try {
-        const groupId = req.params.groupId;
-        const { pollId, candidateId } = req.body;
-        const userId = req.user.userId;
-
-        const pollRef = db.collection('groups').doc(groupId).collection('polls').doc(pollId);
-        const pollDoc = await pollRef.get();
-
-        if (!pollDoc.exists || pollDoc.data().status !== 'active') {
-            return res.status(400).json({ error: 'Poll is not active' });
+        const myBalance = groupBalancesPaise(await groupEntries(req.params.groupId))[userId] || 0;
+        if (myBalance !== 0) {
+            return res.status(400).json({ error: 'Settle up before leaving: you still have an open balance in this group.' });
         }
 
-        // Cast or update vote
-        await pollRef.collection('votes').doc(userId).set({
-            voter_id: userId,
-            candidate_id: candidateId,
-            created_at: FieldValue.serverTimestamp()
-        });
+        const remaining = (req.group.members || []).filter(id => id !== userId);
+        await req.groupDoc.ref.update({ members: FieldValue.arrayRemove(userId) });
+        socketService.emitToGroup(req.params.groupId, remaining, 'update_groups', { groupId: req.params.groupId, action: 'member_left' });
 
-        // Check for majority
-        const groupDoc = await db.collection('groups').doc(groupId).get();
-        const members = groupDoc.data().members || [];
-        const majorityThreshold = Math.floor(members.length / 2) + 1;
-
-        const votesSnap = await pollRef.collection('votes').where('candidate_id', '==', candidateId).get();
-        const currentVotes = votesSnap.size;
-
-        if (currentVotes >= majorityThreshold) {
-            // Majority reached! Promote to admin
-            const batch = db.batch();
-            batch.update(db.collection('groups').doc(groupId), { admin_id: candidateId });
-            batch.update(pollRef, { status: 'completed' });
-            await batch.commit();
-            
-            socketService.emitToGroup(groupId, members, 'update_groups', { groupId, action: 'admin_updated' });
-            socketService.emitToGroup(groupId, members, 'update_poll', { groupId, pollId, action: 'completed' });
-
-            return res.json({ message: 'Majority reached! Admin updated.', promoted: true });
-        }
-
-        socketService.emitToGroup(groupId, members, 'update_poll', { groupId, pollId, action: 'voted' });
-
-        res.json({ message: 'Vote cast successfully', promoted: false });
+        res.json({ message: 'Left group successfully' });
     } catch (err) {
         next(err);
     }
 });
 
-router.post('/:groupId/leave', checkGroupMembership, async (req, res) => {
+router.delete('/:groupId', checkGroupMembership, async (req, res, next) => {
     try {
-        const groupId = req.params.groupId;
-        const userId = req.user.userId;
-
-        const groupRef = db.collection('groups').doc(groupId);
-        await groupRef.update({
-            members: FieldValue.arrayRemove(userId)
-        });
-        
-        const groupDoc = await groupRef.get();
-        const remaining = groupDoc.data().members || [];
-
-        if (remaining.length === 0) {
-            await groupRef.delete();
-        } else {
-            socketService.emitToGroup(groupId, remaining, 'update_groups', { groupId, action: 'member_left' });
-        }
-        
-        res.status(200).json({ message: 'Left group successfully' });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
-    }
-});
-
-router.delete('/:groupId', checkGroupMembership, async (req, res) => {
-    try {
-        const groupId = req.params.groupId;
-        const userId = req.user.userId;
-
-        const groupRef = db.collection('groups').doc(groupId);
-        const groupDoc = await groupRef.get();
-        
-        if (!groupDoc.exists) return res.status(404).json({ error: 'Group not found' });
-
-        if (groupDoc.data().created_by !== userId) {
-            return res.status(403).json({ error: 'Only the creator can delete the group' });
+        if (req.group.created_by !== req.user.userId) {
+            return res.status(403).json({ error: 'Only the person who created the group can delete it' });
         }
 
-        const members = groupDoc.data().members || [];
-        await groupRef.delete();
-        
-        socketService.emitToGroup(groupId, members, 'update_groups', { groupId, action: 'deleted' });
+        const balances = groupBalancesPaise(await groupEntries(req.params.groupId));
+        if (Object.values(balances).some(paise => paise !== 0)) {
+            return res.status(400).json({ error: 'Everyone needs to be settled up before the group can be deleted.' });
+        }
 
-        res.status(200).json({ message: 'Group deleted successfully' });
+        await req.groupDoc.ref.delete();
+        socketService.emitToGroup(req.params.groupId, req.group.members || [], 'update_groups', { groupId: req.params.groupId, action: 'deleted' });
+
+        res.json({ message: 'Group deleted successfully' });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
+        next(err);
     }
 });
 

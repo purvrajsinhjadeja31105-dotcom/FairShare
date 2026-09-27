@@ -32,6 +32,13 @@ const createEmailLimiter = (limit = isProduction ? 5 : 100) => limiter({
     message: 'Too many requests. Please wait an hour before trying again.'
 });
 
+/** Joining groups by invite code, per IP: stops anyone from brute-forcing codes. */
+const createJoinLimiter = (limit = isProduction ? 30 : 1000) => limiter({
+    windowMs: 60 * MINUTE,
+    limit,
+    message: 'Too many attempts to join groups. Please wait a while and try again.'
+});
+
 /** Broad safety net for the whole API, per IP. */
 const createApiLimiter = (limit = isProduction ? 600 : 10000) => limiter({
     windowMs: 15 * MINUTE,
@@ -43,6 +50,8 @@ module.exports = {
     createLoginLimiter,
     createEmailLimiter,
     createApiLimiter,
+    createJoinLimiter,
+    joinLimiter: createJoinLimiter(),
     loginLimiter: createLoginLimiter(),
     emailLimiter: createEmailLimiter(),
     apiLimiter: createApiLimiter()

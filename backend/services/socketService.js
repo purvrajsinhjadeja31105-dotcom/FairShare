@@ -2,6 +2,7 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = require('../config/env');
 const { corsOrigin } = require('../config/cors');
+const { accountExists } = require('./accountCheck');
 
 let io;
 
@@ -20,13 +21,19 @@ const init = (server) => {
             return next(new Error('Authentication error: No token provided'));
         }
 
+        let decoded;
         try {
-            const decoded = jwt.verify(token, JWT_SECRET);
-            socket.user = decoded;
-            next();
-        } catch (err) {
-            next(new Error('Authentication error: Invalid token'));
+            decoded = jwt.verify(token, JWT_SECRET);
+        } catch {
+            return next(new Error('Authentication error: Invalid token'));
         }
+        accountExists(decoded.userId)
+            .then(exists => {
+                if (!exists) return next(new Error('Authentication error: Account no longer exists'));
+                socket.user = decoded;
+                next();
+            })
+            .catch(() => next(new Error('Authentication error: Could not verify account')));
     });
 
     io.on('connection', (socket) => {

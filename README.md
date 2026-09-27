@@ -2,35 +2,22 @@
 
 [![Live Demo](https://img.shields.io/badge/Live-Demo-brightgreen?style=for-the-badge&logo=vercel)](https://fair-share-sage.vercel.app/)
 
-A full-stack, real-time expense sharing application inspired by Splitwise, designed to simplify group expense management, debt tracking, and settlements.
+**Split bills with friends in seconds, and settle with one UPI scan.**
+
+For trips, flatmates and nights out: anyone in the group adds what they paid, everyone sees who owes whom in real time, and debts are settled with a UPI payment that the receiver confirms. See [PRODUCT.md](PRODUCT.md) for the product definition and [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md) for the plan.
 
 ---
 
 ## 🚀 Features
 
-### 🔐 Authentication & Security
-- Secure user authentication using JWT
-- Password hashing with bcrypt
-- Email verification using Nodemailer
-- Protected routes and secure API access
-
-### 👥 Group Management
-- Create and manage expense groups
-- Add and invite members
-- Group activity tracking
-- Admin selection using real-time polling
-
-### 💸 Expense Management
-- Add and split expenses (Equal, Unequal, Percentage)
-- Real-time balance calculation
-- Track who owes whom
-- Settlement workflow for clearing debts
-
-### ⚡ Real-Time Updates
-- Instant updates using Socket.io
-- Live notifications for user activities
-- No manual refresh required
-- Private socket rooms for secure communication
+- **Groups with invite links:** create a group and share a link on WhatsApp; friends join after signing in
+- **Add an expense in one screen:** anyone can be the payer; split equally, by exact amounts or by percent; shares always add up to the paisa
+- **Balances first:** Home shows your total and each person you owe or who owes you; the group screen suggests the fewest payments to settle everyone
+- **Settle with UPI:** one tap opens Google Pay, PhonePe or Paytm with the amount filled in (QR code on desktop)
+- **Trusted payments:** "I've paid" stays pending until the receiver confirms, so nobody can wipe out a debt on their own
+- **History on every entry:** who added, edited or deleted it, and what changed
+- **Live updates:** changes appear instantly for everyone in the group (Socket.io)
+- **Secure accounts:** email verification, password reset, rate limiting, hashed one-time tokens
 
 ---
 
@@ -64,15 +51,17 @@ A full-stack, real-time expense sharing application inspired by Splitwise, desig
 
 ## 🏗️ Architecture
 
-### Backend
-- Modular route structure (Auth, Groups, Expenses, Users)
-- Middleware for authentication
-- Services for email and socket handling
+### Backend (`backend/`)
+- `routes/`: auth, groups (incl. invite links), expenses (incl. settlements, history, `/overview`), users, notifications
+- `services/`: pure business logic, unit-tested without a database: `balances` (group balances and the Home overview), `debtSimplifier`, `ledger` (what counts toward balances), `expenseRules`, `auditLog`, `emailService`
+- `utils/money.js`: all money math in integer paise
+- `middleware/`: auth, group membership, validation (Zod), rate limiting, errors
 
-### Frontend
-- Context API for global state management
-- Centralized API handling
-- Socket integration for real-time features
+### Frontend (`frontend/src/`)
+- `pages/`: Home, Group, ExpenseForm, Join, Activity, Account, auth pages, Landing
+- `components/`: settle-up sheet (UPI), invite sheet, expense rows and details, shared UI
+- `api/`: one function per endpoint; `auth/`: session state; `hooks/useApiData`: cached loading + live refresh
+- `utils/`: split math, formatting, UPI link (unit-tested with Vitest)
 
 ---
 
@@ -81,19 +70,20 @@ A full-stack, real-time expense sharing application inspired by Splitwise, desig
 The application uses Cloud Firestore with the following collections:
 
 - `users` – User details and authentication data
-- `groups` – Group information, member IDs and the elected admin
-- `expenses` – Expense records with their per-member splits embedded
+- `groups` – Name, creator, member IDs and invite code
+- `expenses` – Expenses and payments (settlements) with per-member splits, date, and status for payments (pending / confirmed / rejected); deleted entries are kept with `deleted_at`
+- `audit_logs` – Append-only history of every change to an expense or payment
 - `notifications` – User activity alerts
-- `polls` / `votes` – Admin elections
 
 ---
 
 ## 🔒 Security Features
 
-- Encrypted passwords using bcrypt
-- JWT-based authentication for APIs
-- Email verification with secure tokens
-- Authenticated Socket.io connections
+- Passwords hashed with bcrypt; JWT sessions; the server refuses to start without a JWT secret
+- Verification and reset tokens stored as SHA-256 hashes, with expiry
+- Rate limiting on login, sign-up, password reset and invite joins
+- Security headers (helmet), strict CORS for the API and Socket.io
+- Enumeration-safe login and password reset
 
 ---
 
@@ -107,7 +97,7 @@ Local development uses the **Firestore emulator**, so nothing you do on your mac
 npm run setup                               # install root, backend and frontend dependencies
 cp backend/.env.example backend/.env        # then set JWT_SECRET to any long random string
 cp frontend/.env.example frontend/.env
-npm run dev                                 # emulator + seeded demo data + backend + frontend
+npm run dev                                 # emulator + demo users + backend + frontend
 ```
 
 | What | URL |
@@ -116,11 +106,11 @@ npm run dev                                 # emulator + seeded demo data + back
 | API | http://localhost:5000/api |
 | Emulator UI (browse the database) | http://localhost:4000 |
 
-Demo logins (reset on every `npm run dev`): `asha@example.com`, `bala@example.com`, `chen@example.com`, all with password `password123`.
+Demo logins (reset on every `npm run dev`; no groups are created, so start by making one): `asha@example.com`, `bala@example.com`, `chen@example.com`, all with password `password123`.
 
 With `EMAIL_MODE=console`, verification and password-reset links are printed in the terminal instead of being emailed.
 
-**Tests:** `npm test` (backend unit tests) · `npm --prefix backend run test:api` (API tests on the emulator) · `npm run lint` (frontend)
+**Tests:** `npm test` (backend unit) · `npm --prefix backend run test:api` (API tests on the emulator) · `npm --prefix frontend test` · `npm run lint`
 
 ---
 
@@ -134,19 +124,17 @@ With `EMAIL_MODE=console`, verification and password-reset links are printed in 
 
 ## 📈 Future Improvements
 
-- Social login (Google, Facebook)
-- Push notifications
-- Expense analytics & charts
-- Multi-currency support
+See [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md): launch, then real users, then only the features they ask for.
 
 ---
 
 ## 📌 Project Highlights
 
-- Full-stack application using React, Node.js, and MySQL
-- Real-time synchronization across users
-- Scalable and modular backend architecture
-- Secure authentication and authorization system
+- Exact money math in integer paise: splits always add up, with fair remainder distribution
+- Debt simplification: a group of *n* people settles in at most *n − 1* payments
+- Two-party payment confirmation and an append-only audit log
+- Real-time sync across users with Socket.io
+- 145+ tests (backend unit, API tests against the Firestore emulator, frontend), run in GitHub Actions CI
 
 ---
 

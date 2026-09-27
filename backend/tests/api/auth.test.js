@@ -1,6 +1,7 @@
 const { app, db, request, clearDb, createUser, PASSWORD } = require('./helpers');
 const emailService = require('../../services/emailService');
 const { hashToken } = require('../../utils/tokens');
+const { _clearAccountCache } = require('../../services/accountCheck');
 
 const findUser = async (email) => (await db.collection('users').where('email', '==', email).get()).docs[0];
 
@@ -139,6 +140,19 @@ describe('protected routes', () => {
     test('reject requests without a valid token', async () => {
         expect((await request(app).get('/api/groups')).status).toBe(403);
         expect((await request(app).get('/api/groups').set('Authorization', 'Bearer forged')).status).toBe(401);
+    });
+
+    test('a correctly signed token for an account that no longer exists is rejected', async () => {
+        const ghost = await createUser({ username: 'ghost', email: 'ghost@test.com' });
+        await db.collection('users').doc(ghost.id).delete();
+        _clearAccountCache();
+
+        for (const [method, url] of [['get', '/api/groups'], ['post', '/api/groups']]) {
+            const res = await request(app)[method](url).set('Authorization', `Bearer ${ghost.token}`).send({ name: 'Should not exist' });
+            expect(res.status).toBe(401);
+            expect(res.body.error).toMatch(/log in again/);
+        }
+        expect((await db.collection('groups').get()).size).toBe(0);
     });
 
     test('malformed JSON gets a 400, not a 500', async () => {
